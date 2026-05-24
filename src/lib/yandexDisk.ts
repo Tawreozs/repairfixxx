@@ -11,7 +11,8 @@ export interface CloudDatabase {
 export async function yandexFileExists(token: string, path: string = 'app:/repair_db.json'): Promise<boolean> {
   try {
     const res = await fetch(`https://cloud-api.yandex.net/v1/disk/resources?path=${encodeURIComponent(path)}`, {
-      method: 'GET',
+          mode: 'cors',
+          method: 'GET',
       headers: {
         'Authorization': `OAuth ${token}`
       }
@@ -77,10 +78,7 @@ async function downloadDirectFromClient(token: string): Promise<DownloadResult> 
   // To avoid IP mismatch blocks on downloader.disk.yandex.ru, we MUST request both 
   // the download href AND download the file itself using the EXACT SAME proxy provider.
   const flowProviders = [
-    { name: 'direct', wrap: (url: string) => url },
-    { name: 'corsproxy.io', wrap: (url: string) => `https://corsproxy.io/?url=${encodeURIComponent(url)}` },
-    { name: 'allorigins', wrap: (url: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}` },
-    { name: 'codetabs', wrap: (url: string) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}` }
+    { name: 'direct', wrap: (url: string) => url }
   ];
 
   let lastErrorMsg = 'Не удалось найти работающий способ подключения';
@@ -97,6 +95,7 @@ async function downloadDirectFromClient(token: string): Promise<DownloadResult> 
         const proxiedMetaUrl = provider.wrap(metaUrl);
         
         const metaRes = await fetch(proxiedMetaUrl, {
+          mode: 'cors',
           method: 'GET',
           headers: {
             'Authorization': `OAuth ${token}`
@@ -174,10 +173,7 @@ async function uploadDirectFromClient(token: string, db: CloudDatabase): Promise
   // To avoid IP mismatch blocks on upload target node, we MUST request both
   // the upload href AND upload the data itself using the EXACT SAME proxy provider.
   const flowProviders = [
-    { name: 'direct', wrap: (url: string) => url },
-    { name: 'corsproxy.io', wrap: (url: string) => `https://corsproxy.io/?url=${encodeURIComponent(url)}` },
-    { name: 'allorigins', wrap: (url: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}` },
-    { name: 'codetabs', wrap: (url: string) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}` }
+    { name: 'direct', wrap: (url: string) => url }
   ];
 
   let lastErrorMsg = 'Не удалось найти работающий способ подключения для отправки';
@@ -191,6 +187,7 @@ async function uploadDirectFromClient(token: string, db: CloudDatabase): Promise
         const proxiedMetaUrl = provider.wrap(metaUrl);
         
         const metaRes = await fetch(proxiedMetaUrl, {
+          mode: 'cors',
           method: 'GET',
           headers: {
             'Authorization': `OAuth ${token}`
@@ -211,6 +208,7 @@ async function uploadDirectFromClient(token: string, db: CloudDatabase): Promise
         // Perform PUT upload using the SAME provider for IP parity
         const proxiedUploadUrl = provider.wrap(href);
         const uploadRes = await fetch(proxiedUploadUrl, {
+          mode: 'cors',
           method: 'PUT',
           headers: {
             'Content-Type': 'application/json'
@@ -247,7 +245,8 @@ async function testYandexTokenDirectly(token: string): Promise<TestTokenResult> 
   try {
     // 1. Try cloud-api:info (general endpoint)
     const res = await fetch('https://cloud-api.yandex.net/v1/disk/', {
-      method: 'GET',
+          mode: 'cors',
+          method: 'GET',
       headers: {
         'Authorization': `OAuth ${token}`
       }
@@ -265,7 +264,8 @@ async function testYandexTokenDirectly(token: string): Promise<TestTokenResult> 
     if (res.status === 403) {
       // Fallback: token might specify only folder app access
       const appRes = await fetch('https://cloud-api.yandex.net/v1/disk/resources?path=app:/', {
-        method: 'GET',
+          mode: 'cors',
+          method: 'GET',
         headers: {
           'Authorization': `OAuth ${token}`
         }
@@ -276,7 +276,8 @@ async function testYandexTokenDirectly(token: string): Promise<TestTokenResult> 
 
       // Also try disk:/ path check
       const diskRes = await fetch('https://cloud-api.yandex.net/v1/disk/resources?path=disk:/', {
-        method: 'GET',
+          mode: 'cors',
+          method: 'GET',
         headers: {
           'Authorization': `OAuth ${token}`
         }
@@ -417,7 +418,8 @@ export async function uploadYandexDoc(token: string, db: CloudDatabase): Promise
   try {
     addStep('Отправка обновленной базы через серверный прокси...', 'info');
     const res = await fetch('/api/yandex/upload', {
-      method: 'POST',
+          mode: 'cors',
+          method: 'POST',
       headers: {
         'Content-Type': 'application/json'
       },
