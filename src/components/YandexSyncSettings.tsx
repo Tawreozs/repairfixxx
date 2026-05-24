@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { X, Key, Cloud, CheckCircle2, HelpCircle, AlertTriangle, RefreshCw, Copy, ExternalLink } from 'lucide-react';
+import { testYandexToken } from '../lib/yandexDisk';
 
 interface YandexSyncSettingsProps {
   isOpen: boolean;
@@ -43,12 +44,7 @@ export default function YandexSyncSettings({
     setTestResult(null);
 
     try {
-      const res = await fetch(`/api/yandex/test?token=${encodeURIComponent(cleanToken)}`);
-      if (!res.ok) {
-        throw new Error(`Ошибка сервера: статус ${res.status}`);
-      }
-
-      const result = await res.json();
+      const result = await testYandexToken(cleanToken);
 
       if (result.success) {
         setTestResult({
@@ -65,7 +61,7 @@ export default function YandexSyncSettings({
     } catch (err: any) {
       setTestResult({
         success: false,
-        message: `Не удалось связаться с серверами Яндекс: ${err?.message || 'ошибка сети'}`
+        message: `Не удалось проверить токен: ${err?.message || 'ошибка сети'}`
       });
     } finally {
       setTesting(false);
