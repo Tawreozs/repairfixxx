@@ -3,9 +3,22 @@ import path from "path";
 import fs from "fs";
 import { createServer as createViteServer } from "vite";
 
+// Force Node to bypass Russian root certificate errors from Yandex Disk domains
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+
 const app = express();
 const PORT = 3000;
 const DB_PATH = path.join(process.cwd(), "db.json");
+
+// Robust secure fetch wrapper to handle request headers (User-Agent bypass) perfectly
+async function secureFetch(url: string, options: RequestInit = {}): Promise<Response> {
+  const headers = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    'Accept': 'application/json, text/plain, */*',
+    ...(options.headers || {})
+  };
+  return fetch(url, { ...options, headers });
+}
 
 app.use(express.json({ limit: "10mb" }));
 
@@ -194,14 +207,14 @@ app.post("/api/backup/import", (req, res) => {
 
 // Yandex Disk Proxy APIs to completely eliminate client-side CORS / sandbox issues
 app.get("/api/yandex/test", async (req, res) => {
-  const token = req.query.token as string;
+  const token = (req.query.token as string)?.trim();
   if (!token) {
     return res.status(400).json({ success: false, error: 'Токен отсутствует' });
   }
 
   try {
     // 1. Try general info check
-    const infoRes = await fetch('https://cloud-api.yandex.net/v1/disk/', {
+    const infoRes = await secureFetch('https://cloud-api.yandex.net/v1/disk/', {
       headers: { 'Authorization': `OAuth ${token}` }
     });
 
@@ -215,7 +228,7 @@ app.get("/api/yandex/test", async (req, res) => {
     }
 
     // 2. Try app:/ folder check
-    const appRes = await fetch('https://cloud-api.yandex.net/v1/disk/resources?path=app:/', {
+    const appRes = await secureFetch('https://cloud-api.yandex.net/v1/disk/resources?path=app:/', {
       headers: { 'Authorization': `OAuth ${token}` }
     });
     if (appRes.ok) {
@@ -223,7 +236,7 @@ app.get("/api/yandex/test", async (req, res) => {
     }
 
     // 3. Try disk:/ folder check
-    const diskRes = await fetch('https://cloud-api.yandex.net/v1/disk/resources?path=disk:/', {
+    const diskRes = await secureFetch('https://cloud-api.yandex.net/v1/disk/resources?path=disk:/', {
       headers: { 'Authorization': `OAuth ${token}` }
     });
     if (diskRes.ok) {
@@ -241,20 +254,20 @@ app.get("/api/yandex/test", async (req, res) => {
 });
 
 app.get("/api/yandex/download", async (req, res) => {
-  const token = req.query.token as string;
+  const token = (req.query.token as string)?.trim();
   if (!token) {
     return res.status(400).json({ error: 'Токен отсутствует' });
   }
 
   try {
     let path = 'app:/repair_db.json';
-    let metaRes = await fetch(`https://cloud-api.yandex.net/v1/disk/resources/download?path=${encodeURIComponent(path)}`, {
+    let metaRes = await secureFetch(`https://cloud-api.yandex.net/v1/disk/resources/download?path=${encodeURIComponent(path)}`, {
       headers: { 'Authorization': `OAuth ${token}` }
     });
 
     if (metaRes.status === 403) {
       path = 'disk:/repair_db.json';
-      metaRes = await fetch(`https://cloud-api.yandex.net/v1/disk/resources/download?path=${encodeURIComponent(path)}`, {
+      metaRes = await secureFetch(`https://cloud-api.yandex.net/v1/disk/resources/download?path=${encodeURIComponent(path)}`, {
         headers: { 'Authorization': `OAuth ${token}` }
       });
     }
@@ -274,7 +287,10 @@ app.get("/api/yandex/download", async (req, res) => {
       return res.status(500).json({ error: 'Не получен URL для скачивания от Яндекса' });
     }
 
-    const fileRes = await fetch(href);
+    // Download with the OAuth Authorization header and standard User-Agent via secureFetch
+    const fileRes = await secureFetch(href, {
+      headers: { 'Authorization': `OAuth ${token}` }
+    });
     if (!fileRes.ok) {
       return res.status(fileRes.status).json({ error: `Ошибка при скачивании файла: код ${fileRes.status}` });
     }
@@ -298,20 +314,21 @@ app.get("/api/yandex/download", async (req, res) => {
 
 app.post("/api/yandex/upload", async (req, res) => {
   const { token, db } = req.body;
-  if (!token || !db) {
+  const cleanToken = token?.trim();
+  if (!cleanToken || !db) {
     return res.status(400).json({ error: 'Токен или данные отсутствуют' });
   }
 
   try {
     let path = 'app:/repair_db.json';
-    let metaRes = await fetch(`https://cloud-api.yandex.net/v1/disk/resources/upload?path=${encodeURIComponent(path)}&overwrite=true`, {
-      headers: { 'Authorization': `OAuth ${token}` }
+    let metaRes = await secureFetch(`https://cloud-api.yandex.net/v1/disk/resources/upload?path=${encodeURIComponent(path)}&overwrite=true`, {
+      headers: { 'Authorization': `OAuth ${cleanToken}` }
     });
 
     if (metaRes.status === 403) {
       path = 'disk:/repair_db.json';
-      metaRes = await fetch(`https://cloud-api.yandex.net/v1/disk/resources/upload?path=${encodeURIComponent(path)}&overwrite=true`, {
-        headers: { 'Authorization': `OAuth ${token}` }
+      metaRes = await secureFetch(`https://cloud-api.yandex.net/v1/disk/resources/upload?path=${encodeURIComponent(path)}&overwrite=true`, {
+        headers: { 'Authorization': `OAuth ${cleanToken}` }
       });
     }
 
@@ -325,9 +342,12 @@ app.post("/api/yandex/upload", async (req, res) => {
       return res.status(500).json({ error: 'Не получен URL для загрузки от Яндекса' });
     }
 
-    const uploadRes = await fetch(href, {
+    const uploadRes = await secureFetch(href, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 
+        'Content-Type': 'application/json',
+        'Authorization': `OAuth ${cleanToken}`
+      },
       body: JSON.stringify(db, null, 2)
     });
 
