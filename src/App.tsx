@@ -9,7 +9,7 @@ import { RepairItem, ActiveTab } from './types';
 import { INITIAL_PHONES, INITIAL_ARCHIVE, INITIAL_PARTS } from './initialData';
 import { downloadYandexDoc, uploadYandexDoc, mergeDatabases } from './lib/yandexDisk';
 import YandexSyncSettings from './components/YandexSyncSettings';
-import { Phone, ShoppingCart, Trash2, TrendingUp, Cloud, Cpu } from 'lucide-react';
+import { Phone, ShoppingCart, Trash2, TrendingUp, Cloud, Cpu, RefreshCw, CheckCircle2 } from 'lucide-react';
 
 export default function App() {
   // Navigation states
@@ -60,6 +60,19 @@ export default function App() {
   // Dynamic sync status indicator
   const [syncStatus, setSyncStatus] = useState<'syncing' | 'synced' | 'local' | 'error'>('local');
 
+  // Simple, elegant global toast system
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'info' | 'error' } | null>(null);
+
+  const showToast = (message: string, type: 'success' | 'info' | 'error' = 'success') => {
+    setToast({ message, type });
+  };
+
+  useEffect(() => {
+    if (!toast) return;
+    const timer = setTimeout(() => setToast(null), 3000);
+    return () => clearTimeout(timer);
+  }, [toast]);
+
   // Trigger Cloud Sync flow with Yandex Disk
   const triggerCloudSync = async (
     currentItems: RepairItem[],
@@ -76,9 +89,25 @@ export default function App() {
     setSyncStatus('syncing');
     try {
       // 1. Download database from Yandex.Disk
-      const remoteDb = await downloadYandexDoc(token);
+      const downloadResult = await downloadYandexDoc(token);
       
-      if (remoteDb) {
+      if (!downloadResult.success) {
+        // If there was a network/CDN error, DO NOT initialize or overwrite! Just show error and abort.
+        console.warn('Yandex.Disk pull failed (network or request error). Aborting upload to avoid dataloss.', downloadResult.error);
+        setSyncStatus('error');
+        showToast('Ошибка сетевого диска. Синхронизация отложена.', 'error');
+        return;
+      }
+
+      if (downloadResult.exists && downloadResult.data) {
+        const remoteDb = downloadResult.data;
+        // Detect if there is new incoming data from another device
+        const remoteItems = remoteDb.items || [];
+        const remotePartsText = remoteDb.partsText || '';
+        const localIds = new Set(currentItems.map(i => i.id));
+        const hasNewIncomingItems = remoteItems.length === 0 ? false : remoteItems.some(item => !localIds.has(item.id));
+        const hasNewPartsText = remotePartsText !== currentParts && remotePartsText !== '';
+
         // 2. Perform safe, conflict-free database merge
         const { mergedItems, mergedPartsText, mergedDeletedIds } = mergeDatabases(
           currentItems,
@@ -102,6 +131,9 @@ export default function App() {
 
         if (uploadSuccess) {
           setSyncStatus('synced');
+          if (hasNewIncomingItems || hasNewPartsText) {
+            showToast('Облако: получены новые записи!', 'success');
+          }
         } else {
           setSyncStatus('error');
         }
@@ -157,6 +189,26 @@ export default function App() {
       fetchBackendData();
     }
   }, [ydToken]);
+
+  // Sync immediately when the app becomes visible or the browser tab is focused (crucial for mobile wake-up)
+  useEffect(() => {
+    if (!ydToken) return;
+
+    const handleFocusSync = () => {
+      // Only trigger if document is fully visible to prevent background spamming
+      if (document.visibilityState === 'visible') {
+        triggerCloudSync(items, partsText, deletedIds, ydToken);
+      }
+    };
+
+    window.addEventListener('focus', handleFocusSync);
+    document.addEventListener('visibilitychange', handleFocusSync);
+
+    return () => {
+      window.removeEventListener('focus', handleFocusSync);
+      document.removeEventListener('visibilitychange', handleFocusSync);
+    };
+  }, [ydToken, items, partsText, deletedIds]);
 
   // Periodic automatic sync with Cloud (every 45 seconds)
   useEffect(() => {
@@ -440,25 +492,44 @@ export default function App() {
           </span>
         </div>
 
-        {/* Yandex Settings shortcut indicator */}
-        <button
-          onClick={() => setIsYdOpen(true)}
-          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-semibold select-none cursor-pointer duration-300 transition-all ${
-            syncStatus === 'synced' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' :
-            syncStatus === 'syncing' ? 'bg-blue-500/10 text-blue-400 border-blue-500/20 animate-pulse' :
-            syncStatus === 'error' ? 'bg-rose-500/10 text-rose-400 border-rose-500/20' :
-            'bg-[#1a1a1a] border-[#2b2b2b] text-amber-500'
-          }`}
-          title="Настройки Яндекс.Диска"
-        >
-          <Cloud size={14} className={syncStatus === 'syncing' ? 'animate-bounce' : ''} />
-          <span className="font-mono text-[9px]">
-            {syncStatus === 'synced' ? 'ОК' :
-             syncStatus === 'syncing' ? 'СИНК' :
-             syncStatus === 'error' ? 'ОШИБКА' :
-             'ВЫКЛ'}
-          </span>
-        </button>
+        {/* Yandex Sync Buttons and Indicators */}
+        <div className="flex items-center gap-2">
+          {ydToken && (
+            <button
+              onClick={async () => {
+                showToast('Синхронизация...', 'info');
+                await triggerCloudSync(items, partsText, deletedIds, ydToken);
+                showToast('Синхронизировано!', 'success');
+              }}
+              className={`p-2 rounded-lg bg-[#222222] border border-[#2d2d2d] text-neutral-300 hover:text-white cursor-pointer transition-all active:scale-95 flex items-center justify-center ${
+                syncStatus === 'syncing' ? 'opacity-60' : ''
+              }`}
+              title="Синхронизировать сейчас"
+            >
+              <RefreshCw size={14} className={syncStatus === 'syncing' ? 'animate-spin text-blue-400' : ''} />
+            </button>
+          )}
+
+          {/* Yandex Settings shortcut indicator */}
+          <button
+            onClick={() => setIsYdOpen(true)}
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-semibold select-none cursor-pointer duration-300 transition-all active:scale-95 ${
+              syncStatus === 'synced' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' :
+              syncStatus === 'syncing' ? 'bg-blue-500/10 text-blue-400 border-blue-500/20 animate-pulse' :
+              syncStatus === 'error' ? 'bg-rose-500/10 text-rose-400 border-rose-500/20' :
+              'bg-[#1a1a1a] border-[#2b2b2b] text-amber-500'
+            }`}
+            title="Настройки Яндекс.Диска"
+          >
+            <Cloud size={14} className={syncStatus === 'syncing' ? 'animate-bounce' : ''} />
+            <span className="font-mono text-[9px]">
+              {syncStatus === 'synced' ? 'ОК' :
+               syncStatus === 'syncing' ? 'СИНК' :
+               syncStatus === 'error' ? 'ОШИБКА' :
+               'ВЫКЛ'}
+            </span>
+          </button>
+        </div>
       </header>
 
       {/* Navigation Sidebar */}
@@ -476,6 +547,11 @@ export default function App() {
         onBackupImport={handleBackupImport}
         onBackupExport={handleBackupExport}
         onOpenYandexSettings={() => setIsYdOpen(true)}
+        onForceSync={ydToken ? async () => {
+          showToast('Синхронизация...', 'info');
+          await triggerCloudSync(items, partsText, deletedIds, ydToken);
+          showToast('Синхронизировано!', 'success');
+        } : undefined}
       />
 
       {/* Main Panel Content Area */}
@@ -583,6 +659,24 @@ export default function App() {
         syncStatus={syncStatus}
         onForceSync={() => triggerCloudSync(items, partsText, deletedIds, ydToken)}
       />
+
+      {/* Elegant Toast Alert System */}
+      {toast && (
+        <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-50 animate-in fade-in slide-in-from-bottom-4 duration-300 pointer-events-none">
+          <div className={`px-4 py-2 rounded-full text-xs font-semibold shadow-2xl flex items-center gap-2 border bg-[#141414]/95 backdrop-blur-md ${
+            toast.type === 'success' ? 'border-emerald-500/20 text-emerald-400' :
+            toast.type === 'error' ? 'border-rose-500/20 text-rose-400' :
+            'border-blue-500/20 text-blue-400'
+          }`}>
+            <span className={`h-1.5 w-1.5 rounded-full ${
+              toast.type === 'success' ? 'bg-emerald-400 animate-pulse' :
+              toast.type === 'error' ? 'bg-rose-400' :
+              'bg-blue-400'
+            }`}></span>
+            <span>{toast.message}</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

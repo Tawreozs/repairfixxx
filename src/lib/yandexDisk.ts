@@ -23,8 +23,15 @@ export async function yandexFileExists(token: string, path: string = 'disk:/repa
   }
 }
 
+export interface DownloadResult {
+  success: boolean;
+  exists: boolean;
+  data: CloudDatabase | null;
+  error?: string;
+}
+
 // Download database from Yandex.Disk
-export async function downloadYandexDoc(token: string, path: string = 'disk:/repair_db.json'): Promise<CloudDatabase | null> {
+export async function downloadYandexDoc(token: string, path: string = 'disk:/repair_db.json'): Promise<DownloadResult> {
   try {
     // 1. Get download URL
     const metaRes = await fetch(`https://cloud-api.yandex.net/v1/disk/resources/download?path=${encodeURIComponent(path)}`, {
@@ -36,7 +43,7 @@ export async function downloadYandexDoc(token: string, path: string = 'disk:/rep
 
     if (!metaRes.ok) {
       if (metaRes.status === 404) {
-        return null; // File does not exist yet
+        return { success: true, exists: false, data: null }; // File does not exist yet
       }
       throw new Error(`Failed to get download URL: ${metaRes.status}`);
     }
@@ -49,10 +56,11 @@ export async function downloadYandexDoc(token: string, path: string = 'disk:/rep
       throw new Error(`Failed to fetch file from CDN: ${fileRes.status}`);
     }
 
-    return await fileRes.json();
-  } catch (e) {
+    const data = await fileRes.json();
+    return { success: true, exists: true, data };
+  } catch (e: any) {
     console.error('Failed to download document from Yandex Disk', e);
-    return null;
+    return { success: false, exists: true, data: null, error: e?.message || 'Unknown network error' };
   }
 }
 

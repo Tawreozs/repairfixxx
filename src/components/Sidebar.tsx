@@ -1,5 +1,5 @@
 import React from 'react';
-import { Phone, ShoppingCart, Trash2, ChevronLeft, ChevronRight, Cpu, TrendingUp, Cloud } from 'lucide-react';
+import { Phone, ShoppingCart, Trash2, ChevronLeft, ChevronRight, Cpu, TrendingUp, Cloud, RefreshCw } from 'lucide-react';
 import { ActiveTab } from '../types';
 
 interface SidebarProps {
@@ -13,6 +13,7 @@ interface SidebarProps {
   onBackupImport: (file: File) => Promise<void>;
   onBackupExport: () => void;
   onOpenYandexSettings: () => void;
+  onForceSync?: () => void;
 }
 
 export default function Sidebar({
@@ -25,7 +26,8 @@ export default function Sidebar({
   syncStatus,
   onBackupImport,
   onBackupExport,
-  onOpenYandexSettings
+  onOpenYandexSettings,
+  onForceSync
 }: SidebarProps) {
   const menuItems = [
     {
@@ -150,33 +152,46 @@ export default function Sidebar({
       {/* App Metadata in Footer */}
       {!collapsed && (
         <div className="p-4 border-t border-[#262626] font-sans mt-auto">
-          <button
-            onClick={onOpenYandexSettings}
-            className="w-full flex items-center justify-between text-[10px] tracking-wider uppercase font-mono mb-2 hover:bg-[#222222] p-1.5 rounded transition-all cursor-pointer group text-left border border-transparent hover:border-[#2b2b2b]"
-            title="Открыть настройки облачной синхронизации Яндекс.Диска"
-          >
-            <span className="text-neutral-500 flex items-center gap-1 group-hover:text-neutral-300">
-              <Cloud size={10} className="text-yellow-500" />
-              ОБЛАКО ЯНДЕКС
-            </span>
-            <span className={`font-bold flex items-center gap-1 ${
-              syncStatus === 'synced' ? 'text-emerald-400' :
-              syncStatus === 'syncing' ? 'text-blue-400' :
-              syncStatus === 'error' ? 'text-rose-400' :
-              'text-amber-500'
-            }`}>
-              <span className={`w-1.5 h-1.5 rounded-full ${
-                syncStatus === 'synced' ? 'bg-emerald-400 animate-pulse' :
-                syncStatus === 'syncing' ? 'bg-blue-400 animate-spin' :
-                syncStatus === 'error' ? 'bg-rose-500 animate-bounce' :
-                'bg-amber-500'
-              }`}></span>
-              {syncStatus === 'synced' ? 'ОК' :
-               syncStatus === 'syncing' ? 'СИНК' :
-               syncStatus === 'error' ? 'ОШИБКА' :
-               'ВЫКЛ'}
-            </span>
-          </button>
+          <div className="flex gap-1.5 items-center justify-between mb-2">
+            <button
+              onClick={onOpenYandexSettings}
+              className="flex-1 flex items-center justify-between text-[10px] tracking-wider uppercase font-mono hover:bg-[#222222] p-1.5 rounded transition-all cursor-pointer group text-left border border-transparent hover:border-[#2b2b2b]"
+              title="Открыть настройки облачной синхронизации Яндекс.Диска"
+            >
+              <span className="text-neutral-500 flex items-center gap-1 group-hover:text-neutral-300">
+                <Cloud size={10} className="text-yellow-500" />
+                ОБЛАКО ЯНДЕКС
+              </span>
+              <span className={`font-bold flex items-center gap-1 ${
+                syncStatus === 'synced' ? 'text-emerald-400' :
+                syncStatus === 'syncing' ? 'text-blue-400' :
+                syncStatus === 'error' ? 'text-rose-400' :
+                'text-amber-500'
+              }`}>
+                <span className={`w-1.5 h-1.5 rounded-full ${
+                  syncStatus === 'synced' ? 'bg-emerald-400 animate-pulse' :
+                  syncStatus === 'syncing' ? 'bg-blue-400 animate-spin' :
+                  syncStatus === 'error' ? 'bg-rose-500 animate-bounce' :
+                  'bg-amber-500'
+                }`}></span>
+                {syncStatus === 'synced' ? 'ОК' :
+                 syncStatus === 'syncing' ? 'СИНК' :
+                 syncStatus === 'error' ? 'ОШИБКА' :
+                 'ВЫКЛ'}
+              </span>
+            </button>
+
+            {onForceSync && (
+              <button
+                onClick={onForceSync}
+                className="p-1.5 rounded bg-[#1d1d1d] hover:bg-[#282828] border border-[#2b2b2b] text-neutral-400 hover:text-white transition-all cursor-pointer flex items-center justify-center h-[26px]"
+                title="Синхронизировать сейчас"
+                disabled={syncStatus === 'syncing'}
+              >
+                <RefreshCw size={10} className={syncStatus === 'syncing' ? 'animate-spin text-blue-400' : ''} />
+              </button>
+            )}
+          </div>
 
           <div className="flex gap-2 justify-stretch mt-3">
             <button
