@@ -30,6 +30,27 @@ export interface DownloadResult {
   error?: string;
 }
 
+// Bypasses browser-CORS limits for direct client-side requests to Yandex storage nodes
+async function fetchWithFallback(url: string, options?: RequestInit): Promise<Response> {
+  try {
+    const res = await fetch(url, options);
+    return res;
+  } catch (err) {
+    if (url.startsWith('https://cloud-api.yandex.net') || url.startsWith('/api/')) {
+      throw err;
+    }
+    console.warn(`Direct fetch to ${url} failed. Attempting CORS proxy fallback...`, err);
+    try {
+      const proxiedUrl = `https://corsproxy.io/?url=${encodeURIComponent(url)}`;
+      const res = await fetch(proxiedUrl, options);
+      return res;
+    } catch (proxyErr) {
+      console.error(`CORS proxy fallback to ${url} failed as well.`, proxyErr);
+      throw err; // throw original fetch error
+    }
+  }
+}
+
 // Helper to perform client-side download direct to Yandex Disk
 async function downloadDirectFromClient(token: string): Promise<DownloadResult> {
   try {
@@ -70,8 +91,8 @@ async function downloadDirectFromClient(token: string): Promise<DownloadResult> 
       throw new Error('Не получен URL для скачивания от Яндекса');
     }
 
-    // 2. Fetch the actual content
-    const fileRes = await fetch(href);
+    // 2. Fetch the actual content using CORS-safe helper
+    const fileRes = await fetchWithFallback(href);
     if (!fileRes.ok) {
       throw new Error(`Не удалось загрузить файл по выданной ссылке: ${fileRes.status}`);
     }
@@ -118,8 +139,8 @@ async function uploadDirectFromClient(token: string, db: CloudDatabase): Promise
     const { href } = await metaRes.json();
     if (!href) return false;
 
-    // 2. Perform PUT upload
-    const uploadRes = await fetch(href, {
+    // 2. Perform PUT upload using CORS-safe helper
+    const uploadRes = await fetchWithFallback(href, {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json'
