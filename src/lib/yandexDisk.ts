@@ -34,6 +34,9 @@ export interface DownloadResult {
 async function fetchWithFallback(url: string, options?: RequestInit): Promise<Response> {
   try {
     const res = await fetch(url, options);
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`);
+    }
     return res;
   } catch (err) {
     if (url.startsWith('https://cloud-api.yandex.net') || url.startsWith('/api/')) {
@@ -43,6 +46,9 @@ async function fetchWithFallback(url: string, options?: RequestInit): Promise<Re
     try {
       const proxiedUrl = `https://corsproxy.io/?url=${encodeURIComponent(url)}`;
       const res = await fetch(proxiedUrl, options);
+      if (!res.ok) {
+        throw new Error(`Proxy HTTP ${res.status}`);
+      }
       return res;
     } catch (proxyErr) {
       console.error(`CORS proxy fallback to ${url} failed as well.`, proxyErr);
@@ -53,106 +59,149 @@ async function fetchWithFallback(url: string, options?: RequestInit): Promise<Re
 
 // Helper to perform client-side download direct to Yandex Disk
 async function downloadDirectFromClient(token: string): Promise<DownloadResult> {
-  try {
-    let path = 'app:/repair_db.json';
-    let metaRes = await fetch(`https://cloud-api.yandex.net/v1/disk/resources/download?path=${encodeURIComponent(path)}`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `OAuth ${token}`
-      }
-    });
+  const pathCandidates = ['app:/repair_db.json', 'disk:/repair_db.json'];
+  
+  // To avoid IP mismatch blocks on downloader.disk.yandex.ru, we MUST request both 
+  // the download href AND download the file itself using the EXACT SAME proxy provider (having identical outbound IP address).
+  const flowProviders = [
+    { name: 'direct', wrap: (url: string) => url },
+    { name: 'corsproxy.io', wrap: (url: string) => `https://corsproxy.io/?url=${encodeURIComponent(url)}` },
+    { name: 'allorigins', wrap: (url: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}` },
+    { name: 'codetabs', wrap: (url: string) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}` }
+  ];
 
-    if (metaRes.status === 403) {
-      console.warn('403 Forbidden on app:/ road for download. Attempting fallback to disk:/');
-      path = 'disk:/repair_db.json';
-      metaRes = await fetch(`https://cloud-api.yandex.net/v1/disk/resources/download?path=${encodeURIComponent(path)}`, {
-        method: 'GET',
-        headers: {
-          'Authorization': `OAuth ${token}`
+  let lastErrorMsg = 'Не удалось найти работающий способ подключения';
+
+  for (const provider of flowProviders) {
+    console.log(`Trying client-side download flow using provider: ${provider.name}`);
+    
+    let pathIndex = 0;
+    while (pathIndex < pathCandidates.length) {
+      const path = pathCandidates[pathIndex];
+      try {
+        const metaUrl = `https://cloud-api.yandex.net/v1/disk/resources/download?path=${encodeURIComponent(path)}`;
+        const proxiedMetaUrl = provider.wrap(metaUrl);
+        
+        const metaRes = await fetch(proxiedMetaUrl, {
+          method: 'GET',
+          headers: {
+            'Authorization': `OAuth ${token}`
+          }
+        });
+
+        if (metaRes.status === 404) {
+          // If the primary path doesn't exist, let's check the other path candidate before concluding it's a 404.
+          if (pathIndex < pathCandidates.length - 1) {
+            pathIndex++;
+            continue;
+          }
+          // Checked all candidates and all returned 404, file genuinely does not exist yet.
+          return { success: true, exists: false, data: null };
         }
-      });
-    }
 
-    if (!metaRes.ok) {
-      if (metaRes.status === 404) {
-        return { success: true, exists: false, data: null }; // File does not exist yet
+        if (!metaRes.ok) {
+          throw new Error(`Yandex Meta API returned status ${metaRes.status}`);
+        }
+
+        const metaData = await metaRes.json();
+        const href = metaData.href;
+        if (!href) {
+          throw new Error('No href download link in metadata response');
+        }
+
+        // Fetch the file content from href using the SAME provider for IP parity
+        const proxiedDownloadUrl = provider.wrap(href);
+        const fileRes = await fetch(proxiedDownloadUrl);
+
+        if (!fileRes.ok) {
+          throw new Error(`File download returned status ${fileRes.status}`);
+        }
+
+        const text = await fileRes.text();
+        if (text.trim().startsWith('<') || text.includes('<!doctype') || text.includes('<html')) {
+          throw new Error('Получен HTML вместо JSON (возможна защитная блокировка или лимит прокси)');
+        }
+
+        const data = JSON.parse(text);
+        return { success: true, exists: true, data };
+      } catch (err: any) {
+        console.warn(`Download flow failed for provider ${provider.name} and path ${path}:`, err);
+        lastErrorMsg = err?.message || String(err);
+        
+        pathIndex++;
       }
-      if (metaRes.status === 403) {
-        throw new Error(`Ошибка 403: Нет доступа. Проверьте права токена в Яндексе (нужен доступ к "Папке приложения" ИЛИ "Записи файлов на Диск").`);
-      }
-      if (metaRes.status === 401) {
-        throw new Error(`Ошибка 401: Токен недействителен (авторизация не пройдена).`);
-      }
-      throw new Error(`Яндекс вернул статус ${metaRes.status} при получении ссылки на скачивание`);
     }
-
-    const { href } = await metaRes.json();
-    if (!href) {
-      throw new Error('Не получен URL для скачивания от Яндекса');
-    }
-
-    // 2. Fetch the actual content using CORS-safe helper
-    const fileRes = await fetchWithFallback(href);
-    if (!fileRes.ok) {
-      throw new Error(`Не удалось загрузить файл по выданной ссылке: ${fileRes.status}`);
-    }
-
-    const text = await fileRes.text();
-    if (text.trim().startsWith('<') || text.includes('<!doctype') || text.includes('<html')) {
-      throw new Error('Яндекс вернул HTML-страницу авторизации вместо JSON-файла. Проверьте права токена.');
-    }
-
-    const data = JSON.parse(text);
-    return { success: true, exists: true, data };
-  } catch (e: any) {
-    console.error('Failed direct download from Yandex Disk', e);
-    return { success: false, exists: true, data: null, error: e?.message || 'Неизвестная сетевая ошибка напрямую' };
   }
+
+  return {
+    success: false,
+    exists: true,
+    data: null,
+    error: lastErrorMsg
+  };
 }
 
 // Helper to perform client-side upload direct to Yandex Disk
 async function uploadDirectFromClient(token: string, db: CloudDatabase): Promise<boolean> {
-  try {
-    let path = 'app:/repair_db.json';
-    let metaRes = await fetch(`https://cloud-api.yandex.net/v1/disk/resources/upload?path=${encodeURIComponent(path)}&overwrite=true`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `OAuth ${token}`
-      }
-    });
+  const pathCandidates = ['app:/repair_db.json', 'disk:/repair_db.json'];
+  
+  // To avoid IP mismatch blocks on upload target node, we MUST request both
+  // the upload href AND upload the data itself using the EXACT SAME proxy provider (having identical outbound IP address).
+  const flowProviders = [
+    { name: 'direct', wrap: (url: string) => url },
+    { name: 'corsproxy.io', wrap: (url: string) => `https://corsproxy.io/?url=${encodeURIComponent(url)}` },
+    { name: 'allorigins', wrap: (url: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}` },
+    { name: 'codetabs', wrap: (url: string) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}` }
+  ];
 
-    if (metaRes.status === 403) {
-      path = 'disk:/repair_db.json';
-      metaRes = await fetch(`https://cloud-api.yandex.net/v1/disk/resources/upload?path=${encodeURIComponent(path)}&overwrite=true`, {
-        method: 'GET',
-        headers: {
-          'Authorization': `OAuth ${token}`
+  for (const provider of flowProviders) {
+    console.log(`Trying client-side upload flow using provider: ${provider.name}`);
+    for (const path of pathCandidates) {
+      try {
+        const metaUrl = `https://cloud-api.yandex.net/v1/disk/resources/upload?path=${encodeURIComponent(path)}&overwrite=true`;
+        const proxiedMetaUrl = provider.wrap(metaUrl);
+        
+        const metaRes = await fetch(proxiedMetaUrl, {
+          method: 'GET',
+          headers: {
+            'Authorization': `OAuth ${token}`
+          }
+        });
+
+        if (!metaRes.ok) {
+          throw new Error(`Metadata upload request returned status ${metaRes.status}`);
         }
-      });
+
+        const metaData = await metaRes.json();
+        const href = metaData.href;
+        if (!href) {
+          throw new Error('No href upload link in metadata response');
+        }
+
+        // Perform PUT upload using the SAME provider for IP parity
+        const proxiedUploadUrl = provider.wrap(href);
+        const uploadRes = await fetch(proxiedUploadUrl, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(db, null, 2)
+        });
+
+        if (uploadRes.ok) {
+          console.log(`Successfully uploaded to ${path} using provider ${provider.name}`);
+          return true;
+        } else {
+          throw new Error(`Upload node returned status ${uploadRes.status}`);
+        }
+      } catch (err) {
+        console.warn(`Upload flow failed for provider ${provider.name} and path ${path}:`, err);
+        // Continue to the next path/provider
+      }
     }
-
-    if (!metaRes.ok) {
-      console.error('Failed direct upload authorization:', metaRes.status);
-      return false;
-    }
-
-    const { href } = await metaRes.json();
-    if (!href) return false;
-
-    // 2. Perform PUT upload using CORS-safe helper
-    const uploadRes = await fetchWithFallback(href, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(db, null, 2)
-    });
-
-    return uploadRes.ok;
-  } catch (e) {
-    console.error('Failed direct upload to Yandex Disk', e);
-    return false;
   }
+
+  return false;
 }
 
 export interface TestTokenResult {
