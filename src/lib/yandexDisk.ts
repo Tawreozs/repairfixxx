@@ -8,7 +8,7 @@ export interface CloudDatabase {
 }
 
 // Check if a file exists on Yandex.Disk
-export async function yandexFileExists(token: string, path: string = 'disk:/repair_db.json'): Promise<boolean> {
+export async function yandexFileExists(token: string, path: string = 'app:/repair_db.json'): Promise<boolean> {
   try {
     const res = await fetch(`https://cloud-api.yandex.net/v1/disk/resources?path=${encodeURIComponent(path)}`, {
       method: 'GET',
@@ -31,7 +31,7 @@ export interface DownloadResult {
 }
 
 // Download database from Yandex.Disk
-export async function downloadYandexDoc(token: string, path: string = 'disk:/repair_db.json'): Promise<DownloadResult> {
+export async function downloadYandexDoc(token: string, path: string = 'app:/repair_db.json'): Promise<DownloadResult> {
   try {
     // 1. Get download URL
     const metaRes = await fetch(`https://cloud-api.yandex.net/v1/disk/resources/download?path=${encodeURIComponent(path)}`, {
@@ -45,7 +45,13 @@ export async function downloadYandexDoc(token: string, path: string = 'disk:/rep
       if (metaRes.status === 404) {
         return { success: true, exists: false, data: null }; // File does not exist yet
       }
-      throw new Error(`Failed to get download URL: ${metaRes.status}`);
+      if (metaRes.status === 403) {
+        throw new Error(`Ошибка 403: Нет доступа. Проверьте права токена (нужен доступ к Диску/папке приложения).`);
+      }
+      if (metaRes.status === 401) {
+        throw new Error(`Ошибка 401: Токен недействителен (авторизация не пройдена).`);
+      }
+      throw new Error(`Сервер вернул статус ${metaRes.status} при получении ссылки на скачивание`);
     }
 
     const { href } = await metaRes.json();
@@ -53,19 +59,19 @@ export async function downloadYandexDoc(token: string, path: string = 'disk:/rep
     // 2. Fetch the actual content
     const fileRes = await fetch(href);
     if (!fileRes.ok) {
-      throw new Error(`Failed to fetch file from CDN: ${fileRes.status}`);
+      throw new Error(`Не удалось загрузить файл по выданной ссылке: ${fileRes.status}`);
     }
 
     const data = await fileRes.json();
     return { success: true, exists: true, data };
   } catch (e: any) {
     console.error('Failed to download document from Yandex Disk', e);
-    return { success: false, exists: true, data: null, error: e?.message || 'Unknown network error' };
+    return { success: false, exists: true, data: null, error: e?.message || 'Неизвестная сетевая ошибка' };
   }
 }
 
 // Upload database to Yandex.Disk
-export async function uploadYandexDoc(token: string, db: CloudDatabase, path: string = 'disk:/repair_db.json'): Promise<boolean> {
+export async function uploadYandexDoc(token: string, db: CloudDatabase, path: string = 'app:/repair_db.json'): Promise<boolean> {
   try {
     // 1. Get upload URL
     const metaRes = await fetch(`https://cloud-api.yandex.net/v1/disk/resources/upload?path=${encodeURIComponent(path)}&overwrite=true`, {
@@ -76,6 +82,9 @@ export async function uploadYandexDoc(token: string, db: CloudDatabase, path: st
     });
 
     if (!metaRes.ok) {
+      if (metaRes.status === 403) {
+        console.error('Failed to get upload URL: 403 Forbidden. Your token does not have write access to this path.');
+      }
       throw new Error(`Failed to get upload URL: ${metaRes.status}`);
     }
 

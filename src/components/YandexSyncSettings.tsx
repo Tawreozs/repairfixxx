@@ -8,6 +8,7 @@ interface YandexSyncSettingsProps {
   onSaveToken: (newToken: string) => Promise<boolean>;
   onClearToken: () => void;
   syncStatus: 'syncing' | 'synced' | 'local' | 'error';
+  syncErrorMessage?: string;
   onForceSync: () => Promise<void>;
 }
 
@@ -18,6 +19,7 @@ export default function YandexSyncSettings({
   onSaveToken,
   onClearToken,
   syncStatus,
+  syncErrorMessage,
   onForceSync
 }: YandexSyncSettingsProps) {
   const [inputToken, setInputToken] = useState(token);
@@ -119,25 +121,33 @@ export default function YandexSyncSettings({
                 </div>
               </div>
 
-              <div className="pt-2 flex items-center justify-between border-t border-emerald-500/10 text-xs">
-                <span className="text-neutral-400 font-mono">ТЕКУЩИЙ СТАТУС:</span>
-                <span className={`font-semibold flex items-center gap-1.5 ${
-                  syncStatus === 'synced' ? 'text-emerald-400' :
-                  syncStatus === 'syncing' ? 'text-blue-400' :
-                  syncStatus === 'error' ? 'text-rose-400' :
-                  'text-yellow-500'
-                }`}>
-                  <span className={`w-2 h-2 rounded-full ${
-                    syncStatus === 'synced' ? 'bg-emerald-400 animate-pulse' :
-                    syncStatus === 'syncing' ? 'bg-blue-400 animate-spin' :
-                    syncStatus === 'error' ? 'bg-rose-500 animate-bounce' :
-                    'bg-yellow-500'
-                  }`}></span>
-                  {syncStatus === 'synced' ? 'СИНХРОНИЗИРОВАНО' :
-                   syncStatus === 'syncing' ? 'ИДЕТ ОТПРАВКА...' :
-                   syncStatus === 'error' ? 'ОШИБКА ДИСКА' :
-                   'ПОДКЛЮЧЕНО'}
-                </span>
+              <div className="pt-2 flex flex-col gap-2 border-t border-emerald-500/10 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-neutral-400 font-mono">ТЕКУЩИЙ СТАТУС:</span>
+                  <span className={`font-semibold flex items-center gap-1.5 ${
+                    syncStatus === 'synced' ? 'text-emerald-400' :
+                    syncStatus === 'syncing' ? 'text-blue-400' :
+                    syncStatus === 'error' ? 'text-rose-400' :
+                    'text-yellow-500'
+                  }`}>
+                    <span className={`w-2 h-2 rounded-full ${
+                      syncStatus === 'synced' ? 'bg-emerald-400 animate-pulse' :
+                      syncStatus === 'syncing' ? 'bg-blue-400 animate-spin' :
+                      syncStatus === 'error' ? 'bg-rose-500 animate-bounce' :
+                      'bg-yellow-500'
+                    }`}></span>
+                    {syncStatus === 'synced' ? 'СИНХРОНИЗИРОВАНО' :
+                     syncStatus === 'syncing' ? 'ИДЕТ ОТПРАВКА...' :
+                     syncStatus === 'error' ? 'ОШИБКА ДИСКА' :
+                     'ПОДКЛЮЧЕНО'}
+                  </span>
+                </div>
+
+                {syncStatus === 'error' && syncErrorMessage && (
+                  <div className="p-2.5 rounded bg-rose-500/5 border border-rose-500/10 text-rose-300 font-mono text-[10px] break-words text-left leading-relaxed mt-1">
+                    <span className="font-semibold text-rose-400">Детали ошибки:</span> {syncErrorMessage}
+                  </div>
+                )}
               </div>
 
               <div className="flex gap-2 pt-1">

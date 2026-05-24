@@ -59,6 +59,7 @@ export default function App() {
 
   // Dynamic sync status indicator
   const [syncStatus, setSyncStatus] = useState<'syncing' | 'synced' | 'local' | 'error'>('local');
+  const [syncErrorMessage, setSyncErrorMessage] = useState<string>('');
 
   // Simple, elegant global toast system
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'info' | 'error' } | null>(null);
@@ -87,6 +88,7 @@ export default function App() {
     }
 
     setSyncStatus('syncing');
+    setSyncErrorMessage('');
     try {
       // 1. Download database from Yandex.Disk
       const downloadResult = await downloadYandexDoc(token);
@@ -95,6 +97,7 @@ export default function App() {
         // If there was a network/CDN error, DO NOT initialize or overwrite! Just show error and abort.
         console.warn('Yandex.Disk pull failed (network or request error). Aborting upload to avoid dataloss.', downloadResult.error);
         setSyncStatus('error');
+        setSyncErrorMessage(downloadResult.error || 'Не удалось получить данные с Яндекс.Диска.');
         showToast('Ошибка сетевого диска. Синхронизация отложена.', 'error');
         return;
       }
@@ -131,11 +134,13 @@ export default function App() {
 
         if (uploadSuccess) {
           setSyncStatus('synced');
+          setSyncErrorMessage('');
           if (hasNewIncomingItems || hasNewPartsText) {
             showToast('Облако: получены новые записи!', 'success');
           }
         } else {
           setSyncStatus('error');
+          setSyncErrorMessage('Не удалось отправить обновленные данные на Диск.');
         }
       } else {
         // First sync on empty disk / file doesn't exist yet: initialize with current state
@@ -148,13 +153,16 @@ export default function App() {
 
         if (uploadSuccess) {
           setSyncStatus('synced');
+          setSyncErrorMessage('');
         } else {
           setSyncStatus('error');
+          setSyncErrorMessage('Не удалось создать базу данных в папке приложения на Диске.');
         }
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error('Error during Yandex.Disk cloud sync:', e);
       setSyncStatus('error');
+      setSyncErrorMessage(e?.message || 'Неизвестная ошибка во время синхронизации.');
     }
   };
 
@@ -657,6 +665,7 @@ export default function App() {
         onSaveToken={handleSaveYandexToken}
         onClearToken={handleClearYandexToken}
         syncStatus={syncStatus}
+        syncErrorMessage={syncErrorMessage}
         onForceSync={() => triggerCloudSync(items, partsText, deletedIds, ydToken)}
       />
 
