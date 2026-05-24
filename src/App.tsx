@@ -528,17 +528,7 @@ export default function App() {
           </>
         )}
 
-        {/* Floating Custom glide badge simulating bottom footer in original */}
-        <div className="absolute bottom-4 right-4 z-10 pointer-events-none opacity-80 hover:opacity-100 transition-opacity">
-          <div className="bg-[#1e1e1e]/90 text-neutral-400 text-[10px] font-medium font-sans px-3 py-1.5 rounded-lg border border-[#333333] backdrop-blur flex items-center gap-1.5 shadow-md">
-            <span>Powered by</span>
-            <span className="font-bold text-white tracking-wide flex items-center gap-0.5">
-              <span className="text-blue-400">Glide</span>
-              <span className="text-neutral-500">⚡</span>
-              <span className="text-amber-500">React</span>
-            </span>
-          </div>
-        </div>
+
       </main>
 
       {/* Mobile Bottom Navigation Bar */}

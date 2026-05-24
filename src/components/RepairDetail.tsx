@@ -242,13 +242,13 @@ export default function RepairDetail({
                     <button
                       onClick={() => {
                         onRestoreItem(item.id);
-                        showToast('Запись восстановлена из архива');
+                        showToast('Запись возвращена в ремонт');
                         onBack();
                       }}
                       className="flex-1 py-3 px-4 bg-emerald-800 hover:bg-emerald-700 text-white text-sm font-medium rounded-lg flex items-center justify-center gap-2 transition-colors cursor-pointer"
                     >
                       <CheckCircle2 size={16} />
-                      <span>Восстановить в активные</span>
+                      <span>Вернуть в ремонт</span>
                     </button>
                   )}
                   {onDeleteItem && (

@@ -97,108 +97,117 @@ export default function RepairList({
             </p>
           </div>
         ) : (
-          <div className="bg-[#161616] rounded-xl border border-[#222222] divide-y divide-[#242424] overflow-hidden shadow-md">
-            {filteredItems.map((item) => (
-              <div
-                key={item.id}
-                onClick={() => onSelectItem(item)}
-                className="relative flex items-center justify-between p-4 hover:bg-[#1e1e1e] cursor-pointer transition-colors group"
-              >
-                {/* Left content: model, description / reason, phone date */}
-                <div className="flex-1 pr-12">
-                  <h3 className="text-[15px] font-semibold text-[#f5f5f5] tracking-tight group-hover:text-white transition-colors">
-                    {item.model}
-                  </h3>
-                  <div className="text-xs text-[#9e9e9e] mt-1 flex flex-wrap items-center gap-1.5">
-                    {item.reason && (
-                      <>
-                        <span className="line-clamp-1">{item.reason}</span>
-                        <span className="text-neutral-600 font-bold">·</span>
-                      </>
-                    )}
-                    <span>{item.date}</span>
-                    {item.name && (
-                      <>
-                        <span className="text-neutral-600 font-bold">·</span>
-                        <span className="text-neutral-400 font-mono">{item.name}</span>
-                      </>
+          <div className="bg-[#161616] rounded-xl border border-[#222222] divide-y divide-[#242424] shadow-md">
+            {filteredItems.map((item, index) => {
+              const isFirst = index === 0;
+              const isLast = index === filteredItems.length - 1;
+              const isNearBottom = filteredItems.length > 2 && index >= filteredItems.length - 2;
+              return (
+                <div
+                  key={item.id}
+                  onClick={() => onSelectItem(item)}
+                  className={`relative flex items-center justify-between p-4 hover:bg-[#1e1e1e] cursor-pointer transition-colors group ${
+                    isFirst ? 'rounded-t-xl' : ''
+                  } ${isLast ? 'rounded-b-xl' : ''}`}
+                >
+                  {/* Left content: model, description / reason, phone date */}
+                  <div className="flex-1 pr-12">
+                    <h3 className="text-[15px] font-semibold text-[#f5f5f5] tracking-tight group-hover:text-white transition-colors">
+                      {item.model}
+                    </h3>
+                    <div className="text-xs text-[#9e9e9e] mt-1 flex flex-wrap items-center gap-1.5">
+                      {item.reason && (
+                        <>
+                          <span className="line-clamp-1">{item.reason}</span>
+                          <span className="text-neutral-600 font-bold">·</span>
+                        </>
+                      )}
+                      <span>{item.date}</span>
+                      {item.name && (
+                        <>
+                          <span className="text-neutral-600 font-bold">·</span>
+                          <span className="text-neutral-400 font-mono">{item.name}</span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Right controls */}
+                  <div className="relative flex items-center gap-2">
+                    <button
+                      onClick={(e) => toggleDropdown(e, item.id)}
+                      className="p-1.5 rounded-full text-neutral-400 hover:text-white hover:bg-[#2b2b2b] transition-colors"
+                      title="Действия"
+                    >
+                      <MoreHorizontal size={16} />
+                    </button>
+
+                    {/* Dropdown Menu */}
+                    {activeDropdownId === item.id && (
+                      <div className={`absolute right-0 z-20 w-48 bg-[#1e1e1e] border border-[#2d2d2d] rounded-lg shadow-xl py-1 text-sm font-sans animate-in fade-in duration-100 ${
+                        isNearBottom ? 'bottom-8 mb-1 origin-bottom slide-in-from-bottom-2' : 'top-8 mt-1 origin-top slide-in-from-top-2'
+                      }`}>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onSelectItem(item);
+                            setActiveDropdownId(null);
+                          }}
+                          className="w-full text-left px-4 py-2 text-neutral-300 hover:bg-[#282828] hover:text-white flex items-center gap-2"
+                        >
+                          <Smartphone size={14} className="text-blue-400" />
+                          <span>Открыть детали</span>
+                        </button>
+
+                        {tab === 'phones' && onArchiveItem && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onArchiveItem(item.id);
+                              setActiveDropdownId(null);
+                            }}
+                            className="w-full text-left px-4 py-2 text-neutral-300 hover:bg-[#282828] hover:text-white flex items-center gap-2"
+                          >
+                            <Archive size={14} className="text-[#a3e635]" />
+                            <span>В архив</span>
+                          </button>
+                        )}
+
+                        {tab === 'archive' && onRestoreItem && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onRestoreItem(item.id);
+                              setActiveDropdownId(null);
+                            }}
+                            className="w-full text-left px-4 py-2 text-neutral-300 hover:bg-[#282828] hover:text-white flex items-center gap-2"
+                          >
+                            <CheckCircle2 size={14} className="text-[#a3e635]" />
+                            <span>Вернуть в ремонт</span>
+                          </button>
+                        )}
+
+                        {onDeleteItem && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (window.confirm(`Удалить запись "${item.model}" навсегда?`)) {
+                                onDeleteItem(item.id);
+                              }
+                              setActiveDropdownId(null);
+                            }}
+                            className="w-full text-left px-4 py-2 text-rose-400 hover:bg-rose-950/30 hover:text-rose-300 flex items-center gap-2 border-t border-[#2d2d2d]"
+                          >
+                            <Trash2 size={14} />
+                            <span>Удалить</span>
+                          </button>
+                        )}
+                      </div>
                     )}
                   </div>
                 </div>
-
-                {/* Right controls */}
-                <div className="relative flex items-center gap-2">
-                  <button
-                    onClick={(e) => toggleDropdown(e, item.id)}
-                    className="p-1.5 rounded-full text-neutral-400 hover:text-white hover:bg-[#2b2b2b] transition-colors"
-                    title="Действия"
-                  >
-                    <MoreHorizontal size={16} />
-                  </button>
-
-                  {/* Dropdown Menu */}
-                  {activeDropdownId === item.id && (
-                    <div className="absolute right-0 top-8 z-20 w-48 bg-[#1e1e1e] border border-[#2d2d2d] rounded-lg shadow-xl py-1 text-sm font-sans animate-in fade-in slide-in-from-top-2 duration-100">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onSelectItem(item);
-                          setActiveDropdownId(null);
-                        }}
-                        className="w-full text-left px-4 py-2 text-neutral-300 hover:bg-[#282828] hover:text-white flex items-center gap-2"
-                      >
-                        <Smartphone size={14} className="text-blue-400" />
-                        <span>Открыть детали</span>
-                      </button>
-
-                      {tab === 'phones' && onArchiveItem && (
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onArchiveItem(item.id);
-                            setActiveDropdownId(null);
-                          }}
-                          className="w-full text-left px-4 py-2 text-neutral-300 hover:bg-[#282828] hover:text-white flex items-center gap-2"
-                        >
-                          <Archive size={14} className="text-[#a3e635]" />
-                          <span>В архив</span>
-                        </button>
-                      )}
-
-                      {tab === 'archive' && onRestoreItem && (
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onRestoreItem(item.id);
-                            setActiveDropdownId(null);
-                          }}
-                          className="w-full text-left px-4 py-2 text-neutral-300 hover:bg-[#282828] hover:text-white flex items-center gap-2"
-                        >
-                          <CheckCircle2 size={14} className="text-emerald-400" />
-                          <span>Восстановить</span>
-                        </button>
-                      )}
-
-                      {onDeleteItem && (
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            if (window.confirm(`Удалить запись "${item.model}" навсегда?`)) {
-                              onDeleteItem(item.id);
-                            }
-                            setActiveDropdownId(null);
-                          }}
-                          className="w-full text-left px-4 py-2 text-rose-400 hover:bg-rose-950/30 hover:text-rose-300 flex items-center gap-2 border-t border-[#2d2d2d]"
-                        >
-                          <Trash2 size={14} />
-                          <span>Удалить</span>
-                        </button>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
