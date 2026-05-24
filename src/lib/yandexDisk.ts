@@ -33,48 +33,25 @@ export interface DownloadResult {
 // Download database from Yandex.Disk
 export async function downloadYandexDoc(token: string): Promise<DownloadResult> {
   try {
-    let path = 'app:/repair_db.json';
-    let metaRes = await fetch(`https://cloud-api.yandex.net/v1/disk/resources/download?path=${encodeURIComponent(path)}`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `OAuth ${token}`
+    const res = await fetch(`/api/yandex/download?token=${encodeURIComponent(token)}`);
+    
+    if (!res.ok) {
+      let errMessage = `Отказ сервера: статус ${res.status}`;
+      try {
+        const errorJson = await res.json();
+        errMessage = errorJson.error || errMessage;
+      } catch {
+        // Fallback if not a json error
       }
-    });
-
-    if (metaRes.status === 403) {
-      console.warn('403 Forbidden on app:/ road. Attempting automatic fallback to disk:/');
-      path = 'disk:/repair_db.json';
-      metaRes = await fetch(`https://cloud-api.yandex.net/v1/disk/resources/download?path=${encodeURIComponent(path)}`, {
-        method: 'GET',
-        headers: {
-          'Authorization': `OAuth ${token}`
-        }
-      });
+      throw new Error(errMessage);
     }
 
-    if (!metaRes.ok) {
-      if (metaRes.status === 404) {
-        return { success: true, exists: false, data: null }; // File does not exist yet
-      }
-      if (metaRes.status === 403) {
-        throw new Error(`Ошибка 403: Нет доступа. Проверьте права токена в Яндексе (нужен доступ к "Папке приложения" ИЛИ "Записи файлов на Диск").`);
-      }
-      if (metaRes.status === 401) {
-        throw new Error(`Ошибка 401: Токен недействителен (авторизация не пройдена).`);
-      }
-      throw new Error(`Сервер вернул статус ${metaRes.status} при получении ссылки на скачивание`);
+    const result = await res.json();
+    if (result.exists) {
+      return { success: true, exists: true, data: result.data };
+    } else {
+      return { success: true, exists: false, data: null };
     }
-
-    const { href } = await metaRes.json();
-
-    // 2. Fetch the actual content
-    const fileRes = await fetch(href);
-    if (!fileRes.ok) {
-      throw new Error(`Не удалось загрузить файл по выданной ссылке: ${fileRes.status}`);
-    }
-
-    const data = await fileRes.json();
-    return { success: true, exists: true, data };
   } catch (e: any) {
     console.error('Failed to download document from Yandex Disk', e);
     return { success: false, exists: true, data: null, error: e?.message || 'Неизвестная сетевая ошибка' };
@@ -84,44 +61,19 @@ export async function downloadYandexDoc(token: string): Promise<DownloadResult> 
 // Upload database to Yandex.Disk
 export async function uploadYandexDoc(token: string, db: CloudDatabase): Promise<boolean> {
   try {
-    let path = 'app:/repair_db.json';
-    let metaRes = await fetch(`https://cloud-api.yandex.net/v1/disk/resources/upload?path=${encodeURIComponent(path)}&overwrite=true`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `OAuth ${token}`
-      }
-    });
-
-    if (metaRes.status === 403) {
-      console.warn('403 Forbidden on upload to app:/ folder. Falling back to disk:/');
-      path = 'disk:/repair_db.json';
-      metaRes = await fetch(`https://cloud-api.yandex.net/v1/disk/resources/upload?path=${encodeURIComponent(path)}&overwrite=true`, {
-        method: 'GET',
-        headers: {
-          'Authorization': `OAuth ${token}`
-        }
-      });
-    }
-
-    if (!metaRes.ok) {
-      if (metaRes.status === 403) {
-        console.error('Failed to get upload URL: 403 Forbidden. Your token does not have write access to this path.');
-      }
-      throw new Error(`Failed to get upload URL: ${metaRes.status}`);
-    }
-
-    const { href } = await metaRes.json();
-
-    // 2. Perform the PUT upload
-    const uploadRes = await fetch(href, {
-      method: 'PUT',
+    const res = await fetch('/api/yandex/upload', {
+      method: 'POST',
       headers: {
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify(db, null, 2)
+      body: JSON.stringify({ token, db })
     });
 
-    return uploadRes.ok;
+    if (!res.ok) {
+      console.error(`Failed to upload: server responded with ${res.status}`);
+      return false;
+    }
+    return true;
   } catch (e) {
     console.error('Failed to upload document to Yandex Disk', e);
     return false;

@@ -26,12 +26,15 @@ export default function YandexSyncSettings({
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [showInstructions, setShowInstructions] = useState(true);
+  const [clientId, setClientId] = useState('');
+  const [copiedLink, setCopiedLink] = useState(false);
 
   if (!isOpen) return null;
 
   const handleTestAndSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!inputToken.trim()) {
+    const cleanToken = inputToken.trim();
+    if (!cleanToken) {
       setTestResult({ success: false, message: 'Пожалуйста, введите токен.' });
       return;
     }
@@ -40,32 +43,29 @@ export default function YandexSyncSettings({
     setTestResult(null);
 
     try {
-      // Test token on Yandex API
-      const res = await fetch('https://cloud-api.yandex.net/v1/disk/', {
-        method: 'GET',
-        headers: {
-          'Authorization': `OAuth ${inputToken.trim()}`
-        }
-      });
+      const res = await fetch(`/api/yandex/test?token=${encodeURIComponent(cleanToken)}`);
+      if (!res.ok) {
+        throw new Error(`Ошибка сервера: статус ${res.status}`);
+      }
 
-      if (res.ok) {
-        const data = await res.json();
-        const username = data.user?.login || 'Пользователь';
+      const result = await res.json();
+
+      if (result.success) {
         setTestResult({
           success: true,
-          message: `Успешно! Диск подключен. Пользователь: ${username}.`
+          message: `Успешно! Диск подключен. Авторизован как: ${result.username}.`
         });
-        await onSaveToken(inputToken.trim());
+        await onSaveToken(cleanToken);
       } else {
         setTestResult({
           success: false,
-          message: 'Ошибка: Токен не подошел или истек. Проверьте правильность.'
+          message: result.error || 'Неверный токен или нет прав доступа.'
         });
       }
-    } catch (err) {
+    } catch (err: any) {
       setTestResult({
         success: false,
-        message: 'Не удалось связаться с серверами Яндекс. Проверьте интернет.'
+        message: `Не удалось связаться с серверами Яндекс: ${err?.message || 'ошибка сети'}`
       });
     } finally {
       setTesting(false);
@@ -224,9 +224,63 @@ export default function YandexSyncSettings({
                   Нажмите <strong className="text-white">«Создать приложение»</strong> внизу. Вы попадете на страницу со своими ключами. Скопируйте <strong className="text-yellow-400 font-mono">ID приложения</strong> (Client ID).
                 </li>
                 <li>
-                  Вставьте ваш скопированный <strong className="text-white">Client ID</strong> в ссылку ниже и перейдите по ней для получения готового токена:
-                  <div className="mt-2 bg-[#222] p-2 rounded border border-[#333] break-all font-mono">
-                    https://oauth.yandex.ru/authorize?response_type=token&client_id=<span className="text-yellow-500 font-bold">ВАШ_ID_ПРИЛОЖЕНИЯ</span>
+                  Получите готовый токен авторизации по вашей персональной ссылке:
+                  <div className="mt-3 p-3 bg-neutral-900 border border-neutral-800 rounded-xl space-y-3">
+                    <div className="space-y-1">
+                      <label className="text-[11px] text-neutral-400 block font-medium">
+                        Шаг А: Вставьте ваш скопированный <span className="text-yellow-500">Client ID</span> (ID приложения):
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="Например: a0b1c2d3e4f5..."
+                        value={clientId}
+                        onChange={(e) => {
+                          setClientId(e.target.value.trim());
+                          setCopiedLink(false);
+                        }}
+                        className="w-full px-2.5 py-1.5 bg-[#1a1a1a] border border-[#2b2b2b] rounded text-xs text-white placeholder-neutral-600 focus:outline-none focus:border-yellow-500 font-mono"
+                      />
+                    </div>
+                    
+                    <div className="space-y-1">
+                      <label className="text-[11px] text-neutral-400 block font-medium">
+                        Шаг Б: Перейдите по ссылке или скопируйте её:
+                      </label>
+                      {clientId ? (
+                        <div className="space-y-2">
+                          <div className="p-2 bg-yellow-500/5 border border-yellow-500/10 rounded text-[11px] font-mono break-all text-neutral-200 select-all leading-normal">
+                            https://oauth.yandex.ru/authorize?response_type=token&client_id={clientId}
+                          </div>
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                navigator.clipboard.writeText(`https://oauth.yandex.ru/authorize?response_type=token&client_id=${clientId}`);
+                                setCopiedLink(true);
+                                setTimeout(() => setCopiedLink(false), 2000);
+                              }}
+                              className="flex-1 py-1.5 px-3 rounded bg-[#252525] hover:bg-[#303030] border border-[#3b3b3b] text-neutral-200 hover:text-white text-[11px] font-medium flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+                            >
+                              <Copy size={12} className="text-yellow-500" />
+                              {copiedLink ? 'Скопировано!' : 'Скопировать ссылку'}
+                            </button>
+                            <a
+                              href={`https://oauth.yandex.ru/authorize?response_type=token&client_id=${clientId}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="flex-1 py-1.5 px-3 rounded bg-yellow-500 hover:bg-yellow-400 text-black text-[11px] font-semibold flex items-center justify-center gap-1.5 transition-all text-center"
+                            >
+                              Перейти и получить токен
+                              <ExternalLink size={12} />
+                            </a>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="p-3 bg-neutral-950 rounded border border-neutral-800 text-[10px] text-neutral-500 text-center italic">
+                          Заполните ID приложения в "Шаге А", чтобы сгенерировать ссылку...
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </li>
               </ol>

@@ -192,6 +192,156 @@ app.post("/api/backup/import", (req, res) => {
   res.json({ success: true });
 });
 
+// Yandex Disk Proxy APIs to completely eliminate client-side CORS / sandbox issues
+app.get("/api/yandex/test", async (req, res) => {
+  const token = req.query.token as string;
+  if (!token) {
+    return res.status(400).json({ success: false, error: 'Токен отсутствует' });
+  }
+
+  try {
+    // 1. Try general info check
+    const infoRes = await fetch('https://cloud-api.yandex.net/v1/disk/', {
+      headers: { 'Authorization': `OAuth ${token}` }
+    });
+
+    if (infoRes.ok) {
+      const data: any = await infoRes.json();
+      return res.json({ success: true, username: data.user?.login || 'Пользователь' });
+    }
+
+    if (infoRes.status === 401) {
+      return res.json({ success: false, error: 'Ошибка 401: Недействительный или истекший токен.' });
+    }
+
+    // 2. Try app:/ folder check
+    const appRes = await fetch('https://cloud-api.yandex.net/v1/disk/resources?path=app:/', {
+      headers: { 'Authorization': `OAuth ${token}` }
+    });
+    if (appRes.ok) {
+      return res.json({ success: true, username: 'Пользователь (папка софта)' });
+    }
+
+    // 3. Try disk:/ folder check
+    const diskRes = await fetch('https://cloud-api.yandex.net/v1/disk/resources?path=disk:/', {
+      headers: { 'Authorization': `OAuth ${token}` }
+    });
+    if (diskRes.ok) {
+      return res.json({ success: true, username: 'Пользователь (общий Диск)' });
+    }
+
+    res.json({
+      success: false,
+      error: `Ошибка доступа (код ${infoRes.status || 403}). Проверьте права токена в Яндексе.`
+    });
+  } catch (e: any) {
+    console.error("Yandex test error on server:", e);
+    res.json({ success: false, error: e?.message || 'Сетевая ошибка при связи с Яндексом' });
+  }
+});
+
+app.get("/api/yandex/download", async (req, res) => {
+  const token = req.query.token as string;
+  if (!token) {
+    return res.status(400).json({ error: 'Токен отсутствует' });
+  }
+
+  try {
+    let path = 'app:/repair_db.json';
+    let metaRes = await fetch(`https://cloud-api.yandex.net/v1/disk/resources/download?path=${encodeURIComponent(path)}`, {
+      headers: { 'Authorization': `OAuth ${token}` }
+    });
+
+    if (metaRes.status === 403) {
+      path = 'disk:/repair_db.json';
+      metaRes = await fetch(`https://cloud-api.yandex.net/v1/disk/resources/download?path=${encodeURIComponent(path)}`, {
+        headers: { 'Authorization': `OAuth ${token}` }
+      });
+    }
+
+    if (!metaRes.ok) {
+      if (metaRes.status === 404) {
+        return res.json({ exists: false });
+      }
+      return res.status(metaRes.status).json({
+        error: `Яндекс вернул статус ${metaRes.status} при получении ссылки на скачивание.`
+      });
+    }
+
+    const metaData: any = await metaRes.json();
+    const href = metaData.href;
+    if (!href) {
+      return res.status(500).json({ error: 'Не получен URL для скачивания от Яндекса' });
+    }
+
+    const fileRes = await fetch(href);
+    if (!fileRes.ok) {
+      return res.status(fileRes.status).json({ error: `Ошибка при скачивании файла: код ${fileRes.status}` });
+    }
+
+    const text = await fileRes.text();
+    if (text.trim().startsWith('<') || text.includes('<!doctype') || text.includes('<html')) {
+      return res.status(400).json({ error: 'Яндекс вернул HTML-страницу авторизации вместо JSON-файла. Вероятно, ваш токен недействителен, истек или требует повторного подтверждения прав.' });
+    }
+
+    try {
+      const data = JSON.parse(text);
+      return res.json({ exists: true, data });
+    } catch {
+      return res.status(500).json({ error: 'Неверный формат базы данных на Яндексе (ошибка JSON)' });
+    }
+  } catch (e: any) {
+    console.error("Yandex download error on server:", e);
+    res.status(500).json({ error: e?.message || 'Ошибка сервера во время скачивания с Яндекса.' });
+  }
+});
+
+app.post("/api/yandex/upload", async (req, res) => {
+  const { token, db } = req.body;
+  if (!token || !db) {
+    return res.status(400).json({ error: 'Токен или данные отсутствуют' });
+  }
+
+  try {
+    let path = 'app:/repair_db.json';
+    let metaRes = await fetch(`https://cloud-api.yandex.net/v1/disk/resources/upload?path=${encodeURIComponent(path)}&overwrite=true`, {
+      headers: { 'Authorization': `OAuth ${token}` }
+    });
+
+    if (metaRes.status === 403) {
+      path = 'disk:/repair_db.json';
+      metaRes = await fetch(`https://cloud-api.yandex.net/v1/disk/resources/upload?path=${encodeURIComponent(path)}&overwrite=true`, {
+        headers: { 'Authorization': `OAuth ${token}` }
+      });
+    }
+
+    if (!metaRes.ok) {
+      return res.status(metaRes.status).json({ error: `Проблема с правами записи на Яндекс (код ${metaRes.status}).` });
+    }
+
+    const metaData: any = await metaRes.json();
+    const href = metaData.href;
+    if (!href) {
+      return res.status(500).json({ error: 'Не получен URL для загрузки от Яндекса' });
+    }
+
+    const uploadRes = await fetch(href, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(db, null, 2)
+    });
+
+    if (uploadRes.ok) {
+      return res.json({ success: true });
+    } else {
+      return res.status(uploadRes.status).json({ error: `Ошибка отправки PUT-запроса на Яндекс: статус ${uploadRes.status}` });
+    }
+  } catch (e: any) {
+    console.error("Yandex upload error on server:", e);
+    res.status(500).json({ error: e?.message || 'Ошибка сервера при отправке файла на Яндекс.' });
+  }
+});
+
 // Serve frontend with Vite inside Express
 async function bootstrap() {
   if (process.env.NODE_ENV !== "production") {
