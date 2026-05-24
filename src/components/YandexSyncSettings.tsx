@@ -25,7 +25,7 @@ export default function YandexSyncSettings({
   const [inputToken, setInputToken] = useState(token);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
-  const [showInstructions, setShowInstructions] = useState(!token);
+  const [showInstructions, setShowInstructions] = useState(true);
 
   if (!isOpen) return null;
 
@@ -211,10 +211,13 @@ export default function YandexSyncSettings({
                   В разделе <strong className="text-white">Платформы</strong> выберите <strong className="text-white">Веб-сервисы</strong> и нажмите кнопку <strong className="text-white">«Подставить URL для отладки»</strong> (появится URL с кодом).
                 </li>
                 <li>
-                  Внизу найдите <strong className="text-white">Яндекс.Диск (cloud_api)</strong> и поставьте галочки:
-                  <div className="pl-4 mt-1 space-y-0.5">
-                    <div>• <code className="text-yellow-400 font-mono">Доступ к информации о Диске (cloud_api:info)</code></div>
-                    <div>• <code className="text-yellow-400 font-mono">Доступ к папке приложения (cloud_api:write)</code></div>
+                  Внизу найдите <strong className="text-white">Яндекс.Диск (cloud_api)</strong> и выберите один или оба типа прав (наша система автоматически переключится на доступный режим):
+                  <div className="pl-4 mt-1.5 space-y-1">
+                    <div className="text-[11px] leading-relaxed"><span className="text-emerald-400 font-bold">• Доступ к папке приложения</span> (<code className="text-yellow-400 font-mono">cloud_api:write</code> или аналогичный) — для записи базы только в специальную выделенную папку <code className="text-neutral-400">Приложения/MyRepair/</code>.</div>
+                    <div className="text-[11px] leading-relaxed"><span className="text-blue-400 font-bold">• Доступ к записи и чтению файлов на Диске</span> (<code className="text-yellow-400 font-mono">cloud_api:disk.write</code> / <code className="text-yellow-400 font-mono">info</code>) — для записи базы напрямую в корень вашего Диска.</div>
+                    <div className="text-[10px] text-amber-500 bg-amber-500/5 border border-amber-500/10 p-1.5 rounded mt-1 leading-snug">
+                      💡 <b>Авто-выбор:</b> если токен не имеет прав на специальную папку, программа теперь автоматически переключится на сохранение в корень Диска (и наоборот), полностью уберегая вас от ошибок доступа!
+                    </div>
                   </div>
                 </li>
                 <li>

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Phone, ShoppingCart, Trash2, ChevronLeft, ChevronRight, Cpu, TrendingUp, Cloud, RefreshCw } from 'lucide-react';
+import { Phone, ShoppingCart, Trash2, ChevronLeft, ChevronRight, Cpu, TrendingUp, Cloud, RefreshCw, Smartphone } from 'lucide-react';
 import { ActiveTab } from '../types';
 
 interface SidebarProps {
@@ -14,6 +14,7 @@ interface SidebarProps {
   onBackupExport: () => void;
   onOpenYandexSettings: () => void;
   onForceSync?: () => void;
+  onOpenPwaInstaller: () => void;
 }
 
 export default function Sidebar({
@@ -27,7 +28,8 @@ export default function Sidebar({
   onBackupImport,
   onBackupExport,
   onOpenYandexSettings,
-  onForceSync
+  onForceSync,
+  onOpenPwaInstaller
 }: SidebarProps) {
   const menuItems = [
     {
@@ -129,11 +131,32 @@ export default function Sidebar({
             </button>
           );
         })}
+
+        <button
+          onClick={onOpenPwaInstaller}
+          className="w-full flex items-center rounded-lg p-3 text-sm font-medium transition-all group text-neutral-400 hover:bg-[#1e1e1e] hover:text-neutral-200 mt-2 border border-dashed border-[#2b2b2b]"
+          title="Инструкция по установке на телефон как приложения"
+        >
+          <Smartphone
+            size={18}
+            className="text-amber-500 transition-colors group-hover:text-amber-400 flex-shrink-0"
+          />
+          {!collapsed && (
+            <span className="ml-3 truncate flex-1 text-left">Установить PWA</span>
+          )}
+        </button>
       </nav>
 
       {/* Collapse-mode Cloud Sync Button */}
       {collapsed && (
-        <div className="mt-auto p-4 flex justify-center border-t border-[#262626]">
+        <div className="mt-auto p-4 flex flex-col gap-2 items-center border-t border-[#262626]">
+          <button
+            onClick={onOpenPwaInstaller}
+            className="w-8 h-8 rounded-lg bg-[#1d1d1d] hover:bg-[#282828] border border-[#2b2b2b] text-amber-500 flex items-center justify-center transition-all cursor-pointer"
+            title="Инструкция по установке PWA"
+          >
+            <Smartphone size={16} />
+          </button>
           <button
             onClick={onOpenYandexSettings}
             className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all cursor-pointer ${

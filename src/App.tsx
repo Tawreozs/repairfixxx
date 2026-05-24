@@ -9,7 +9,8 @@ import { RepairItem, ActiveTab } from './types';
 import { INITIAL_PHONES, INITIAL_ARCHIVE, INITIAL_PARTS } from './initialData';
 import { downloadYandexDoc, uploadYandexDoc, mergeDatabases } from './lib/yandexDisk';
 import YandexSyncSettings from './components/YandexSyncSettings';
-import { Phone, ShoppingCart, Trash2, TrendingUp, Cloud, Cpu, RefreshCw, CheckCircle2 } from 'lucide-react';
+import PWAInstallGuide from './components/PWAInstallGuide';
+import { Phone, ShoppingCart, Trash2, TrendingUp, Cloud, Cpu, RefreshCw, CheckCircle2, Smartphone } from 'lucide-react';
 
 export default function App() {
   // Navigation states
@@ -20,6 +21,31 @@ export default function App() {
   // Dialog Open states
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [isYdOpen, setIsYdOpen] = useState(false);
+  const [isPwaOpen, setIsPwaOpen] = useState(false);
+
+  // PWA installation trigger references
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+
+  useEffect(() => {
+    const handleBeforeInstallPrompt = (e: Event) => {
+      // Prevent browser default mini-infobar
+      e.preventDefault();
+      // Stash the event so it can be triggered later
+      setDeferredPrompt(e);
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+
+    // Also listen to app installed event
+    window.addEventListener('appinstalled', () => {
+      showToast('Приложение успешно установлено на устройство!', 'success');
+      setDeferredPrompt(null);
+    });
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    };
+  }, []);
 
   // Core Data States with LocalStorage Persistence
   const [items, setItems] = useState<RepairItem[]>(() => {
@@ -502,6 +528,15 @@ export default function App() {
 
         {/* Yandex Sync Buttons and Indicators */}
         <div className="flex items-center gap-2">
+          {/* Mobile Install PWA Button */}
+          <button
+            onClick={() => setIsPwaOpen(true)}
+            className="p-2 rounded-lg bg-[#222222] border border-[#2d2d2d] text-amber-500 hover:text-amber-400 cursor-pointer transition-all active:scale-95 flex items-center justify-center"
+            title="Установить как приложение"
+          >
+            <Smartphone size={14} className={deferredPrompt ? "animate-pulse" : ""} />
+          </button>
+
           {ydToken && (
             <button
               onClick={async () => {
@@ -555,6 +590,7 @@ export default function App() {
         onBackupImport={handleBackupImport}
         onBackupExport={handleBackupExport}
         onOpenYandexSettings={() => setIsYdOpen(true)}
+        onOpenPwaInstaller={() => setIsPwaOpen(true)}
         onForceSync={ydToken ? async () => {
           showToast('Синхронизация...', 'info');
           await triggerCloudSync(items, partsText, deletedIds, ydToken);
@@ -667,6 +703,17 @@ export default function App() {
         syncStatus={syncStatus}
         syncErrorMessage={syncErrorMessage}
         onForceSync={() => triggerCloudSync(items, partsText, deletedIds, ydToken)}
+      />
+
+      {/* PWA Installer Assistant and Guide Booklet */}
+      <PWAInstallGuide
+        isOpen={isPwaOpen}
+        onClose={() => setIsPwaOpen(false)}
+        deferredPrompt={deferredPrompt}
+        onInstallSuccess={() => {
+          showToast('Спасибо за установку приложения!', 'success');
+          setIsPwaOpen(false);
+        }}
       />
 
       {/* Elegant Toast Alert System */}

@@ -31,22 +31,33 @@ export interface DownloadResult {
 }
 
 // Download database from Yandex.Disk
-export async function downloadYandexDoc(token: string, path: string = 'app:/repair_db.json'): Promise<DownloadResult> {
+export async function downloadYandexDoc(token: string): Promise<DownloadResult> {
   try {
-    // 1. Get download URL
-    const metaRes = await fetch(`https://cloud-api.yandex.net/v1/disk/resources/download?path=${encodeURIComponent(path)}`, {
+    let path = 'app:/repair_db.json';
+    let metaRes = await fetch(`https://cloud-api.yandex.net/v1/disk/resources/download?path=${encodeURIComponent(path)}`, {
       method: 'GET',
       headers: {
         'Authorization': `OAuth ${token}`
       }
     });
 
+    if (metaRes.status === 403) {
+      console.warn('403 Forbidden on app:/ road. Attempting automatic fallback to disk:/');
+      path = 'disk:/repair_db.json';
+      metaRes = await fetch(`https://cloud-api.yandex.net/v1/disk/resources/download?path=${encodeURIComponent(path)}`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `OAuth ${token}`
+        }
+      });
+    }
+
     if (!metaRes.ok) {
       if (metaRes.status === 404) {
         return { success: true, exists: false, data: null }; // File does not exist yet
       }
       if (metaRes.status === 403) {
-        throw new Error(`Ошибка 403: Нет доступа. Проверьте права токена (нужен доступ к Диску/папке приложения).`);
+        throw new Error(`Ошибка 403: Нет доступа. Проверьте права токена в Яндексе (нужен доступ к "Папке приложения" ИЛИ "Записи файлов на Диск").`);
       }
       if (metaRes.status === 401) {
         throw new Error(`Ошибка 401: Токен недействителен (авторизация не пройдена).`);
@@ -71,15 +82,26 @@ export async function downloadYandexDoc(token: string, path: string = 'app:/repa
 }
 
 // Upload database to Yandex.Disk
-export async function uploadYandexDoc(token: string, db: CloudDatabase, path: string = 'app:/repair_db.json'): Promise<boolean> {
+export async function uploadYandexDoc(token: string, db: CloudDatabase): Promise<boolean> {
   try {
-    // 1. Get upload URL
-    const metaRes = await fetch(`https://cloud-api.yandex.net/v1/disk/resources/upload?path=${encodeURIComponent(path)}&overwrite=true`, {
+    let path = 'app:/repair_db.json';
+    let metaRes = await fetch(`https://cloud-api.yandex.net/v1/disk/resources/upload?path=${encodeURIComponent(path)}&overwrite=true`, {
       method: 'GET',
       headers: {
         'Authorization': `OAuth ${token}`
       }
     });
+
+    if (metaRes.status === 403) {
+      console.warn('403 Forbidden on upload to app:/ folder. Falling back to disk:/');
+      path = 'disk:/repair_db.json';
+      metaRes = await fetch(`https://cloud-api.yandex.net/v1/disk/resources/upload?path=${encodeURIComponent(path)}&overwrite=true`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `OAuth ${token}`
+        }
+      });
+    }
 
     if (!metaRes.ok) {
       if (metaRes.status === 403) {
