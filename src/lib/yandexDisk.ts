@@ -23,11 +23,18 @@ export async function yandexFileExists(token: string, path: string = 'app:/repai
   }
 }
 
+export interface SyncStep {
+  time: string;
+  message: string;
+  status: 'info' | 'success' | 'error';
+}
+
 export interface DownloadResult {
   success: boolean;
   exists: boolean;
   data: CloudDatabase | null;
   error?: string;
+  steps?: SyncStep[];
 }
 
 // Bypasses browser-CORS limits for direct client-side requests to Yandex storage nodes
@@ -60,9 +67,15 @@ async function fetchWithFallback(url: string, options?: RequestInit): Promise<Re
 // Helper to perform client-side download direct to Yandex Disk
 async function downloadDirectFromClient(token: string): Promise<DownloadResult> {
   const pathCandidates = ['app:/repair_db.json', 'disk:/repair_db.json'];
+  const steps: SyncStep[] = [];
+  const addStep = (message: string, status: 'info' | 'success' | 'error' = 'info') => {
+    steps.push({ time: new Date().toLocaleTimeString('ru-RU'), message, status });
+  };
+
+  addStep('Начало прямого скачивания через браузерные прокси', 'info');
   
   // To avoid IP mismatch blocks on downloader.disk.yandex.ru, we MUST request both 
-  // the download href AND download the file itself using the EXACT SAME proxy provider (having identical outbound IP address).
+  // the download href AND download the file itself using the EXACT SAME proxy provider.
   const flowProviders = [
     { name: 'direct', wrap: (url: string) => url },
     { name: 'corsproxy.io', wrap: (url: string) => `https://corsproxy.io/?url=${encodeURIComponent(url)}` },
@@ -73,12 +86,13 @@ async function downloadDirectFromClient(token: string): Promise<DownloadResult> 
   let lastErrorMsg = 'Не удалось найти работающий способ подключения';
 
   for (const provider of flowProviders) {
-    console.log(`Trying client-side download flow using provider: ${provider.name}`);
+    addStep(`Пробуем обходной провайдер: ${provider.name}`, 'info');
     
     let pathIndex = 0;
     while (pathIndex < pathCandidates.length) {
       const path = pathCandidates[pathIndex];
       try {
+        addStep(`Проверка наличия файла по пути: ${path}`, 'info');
         const metaUrl = `https://cloud-api.yandex.net/v1/disk/resources/download?path=${encodeURIComponent(path)}`;
         const proxiedMetaUrl = provider.wrap(metaUrl);
         
@@ -90,63 +104,75 @@ async function downloadDirectFromClient(token: string): Promise<DownloadResult> 
         });
 
         if (metaRes.status === 404) {
+          addStep(`Путь ${path} не найден на Диске (HTTP 404)`, 'info');
           // If the primary path doesn't exist, let's check the other path candidate before concluding it's a 404.
           if (pathIndex < pathCandidates.length - 1) {
             pathIndex++;
             continue;
           }
-          // Checked all candidates and all returned 404, file genuinely does not exist yet.
-          return { success: true, exists: false, data: null };
+          addStep('Файл базы данных полностью отсутствует на Диске', 'success');
+          return { success: true, exists: false, data: null, steps };
         }
 
         if (!metaRes.ok) {
-          throw new Error(`Yandex Meta API returned status ${metaRes.status}`);
+          throw new Error(`Яндекс вернул статус ошибки: ${metaRes.status}`);
         }
 
         const metaData = await metaRes.json();
         const href = metaData.href;
         if (!href) {
-          throw new Error('No href download link in metadata response');
+          throw new Error('Отсутствует ссылка на прямое скачивание (href)');
         }
 
+        addStep('Ссылка на скачивание получена. Загружаем содержимое файла...', 'info');
         // Fetch the file content from href using the SAME provider for IP parity
         const proxiedDownloadUrl = provider.wrap(href);
         const fileRes = await fetch(proxiedDownloadUrl);
 
         if (!fileRes.ok) {
-          throw new Error(`File download returned status ${fileRes.status}`);
+          throw new Error(`Загрузка файла прервана: статус ${fileRes.status}`);
         }
 
         const text = await fileRes.text();
         if (text.trim().startsWith('<') || text.includes('<!doctype') || text.includes('<html')) {
-          throw new Error('Получен HTML вместо JSON (возможна защитная блокировка или лимит прокси)');
+          throw new Error('Яндекс вернул HTML вместо JSON (возможна блокировка или лимит провайдера)');
         }
 
         const data = JSON.parse(text);
-        return { success: true, exists: true, data };
+        addStep(`База успешно скачана из ${path} через ${provider.name}!`, 'success');
+        return { success: true, exists: true, data, steps };
       } catch (err: any) {
-        console.warn(`Download flow failed for provider ${provider.name} and path ${path}:`, err);
-        lastErrorMsg = err?.message || String(err);
+        const errMsg = err?.message || String(err);
+        addStep(`Ошибка провайдера ${provider.name} на пути ${path}: ${errMsg}`, 'error');
+        lastErrorMsg = errMsg;
         
         pathIndex++;
       }
     }
   }
 
+  addStep('Все альтернативные браузерные провайдеры исчерпали попытки', 'error');
   return {
     success: false,
     exists: true,
     data: null,
-    error: lastErrorMsg
+    error: lastErrorMsg,
+    steps
   };
 }
 
 // Helper to perform client-side upload direct to Yandex Disk
-async function uploadDirectFromClient(token: string, db: CloudDatabase): Promise<{ success: boolean; error?: string }> {
+async function uploadDirectFromClient(token: string, db: CloudDatabase): Promise<{ success: boolean; error?: string; steps?: SyncStep[] }> {
   const pathCandidates = ['app:/repair_db.json', 'disk:/repair_db.json'];
+  const steps: SyncStep[] = [];
+  const addStep = (message: string, status: 'info' | 'success' | 'error' = 'info') => {
+    steps.push({ time: new Date().toLocaleTimeString('ru-RU'), message, status });
+  };
+
+  addStep('Начало прямой отправки файла через браузер', 'info');
   
   // To avoid IP mismatch blocks on upload target node, we MUST request both
-  // the upload href AND upload the data itself using the EXACT SAME proxy provider (having identical outbound IP address).
+  // the upload href AND upload the data itself using the EXACT SAME proxy provider.
   const flowProviders = [
     { name: 'direct', wrap: (url: string) => url },
     { name: 'corsproxy.io', wrap: (url: string) => `https://corsproxy.io/?url=${encodeURIComponent(url)}` },
@@ -157,9 +183,10 @@ async function uploadDirectFromClient(token: string, db: CloudDatabase): Promise
   let lastErrorMsg = 'Не удалось найти работающий способ подключения для отправки';
 
   for (const provider of flowProviders) {
-    console.log(`Trying client-side upload flow using provider: ${provider.name}`);
+    addStep(`Пробуем обходной провайдер: ${provider.name}`, 'info');
     for (const path of pathCandidates) {
       try {
+        addStep(`Запрос адреса выгрузки для пути: ${path}`, 'info');
         const metaUrl = `https://cloud-api.yandex.net/v1/disk/resources/upload?path=${encodeURIComponent(path)}&overwrite=true`;
         const proxiedMetaUrl = provider.wrap(metaUrl);
         
@@ -171,15 +198,16 @@ async function uploadDirectFromClient(token: string, db: CloudDatabase): Promise
         });
 
         if (!metaRes.ok) {
-          throw new Error(`Metadata upload request returned status ${metaRes.status}`);
+          throw new Error(`Яндекс вернул ошибку: ${metaRes.status}`);
         }
 
         const metaData = await metaRes.json();
         const href = metaData.href;
         if (!href) {
-          throw new Error('No href upload link in metadata response');
+          throw new Error('Отсутствует временная ссылка PUT для загрузки');
         }
 
+        addStep(`Адрес получен. Загружаем JSON на сервер хранения...`, 'info');
         // Perform PUT upload using the SAME provider for IP parity
         const proxiedUploadUrl = provider.wrap(href);
         const uploadRes = await fetch(proxiedUploadUrl, {
@@ -191,20 +219,21 @@ async function uploadDirectFromClient(token: string, db: CloudDatabase): Promise
         });
 
         if (uploadRes.ok) {
-          console.log(`Successfully uploaded to ${path} using provider ${provider.name}`);
-          return { success: true };
+          addStep(`База данных успешно выгружена напрямую на ${path} с помощью ${provider.name}!`, 'success');
+          return { success: true, steps };
         } else {
-          throw new Error(`Upload node returned status ${uploadRes.status}`);
+          throw new Error(`Модуль хранения вернул ошибку: ${uploadRes.status}`);
         }
       } catch (err: any) {
-        console.warn(`Upload flow failed for provider ${provider.name} and path ${path}:`, err);
-        lastErrorMsg = err?.message || String(err);
-        // Continue to the next path/provider
+        const errMsg = err?.message || String(err);
+        addStep(`Отказ провайдера ${provider.name} на пути ${path}: ${errMsg}`, 'error');
+        lastErrorMsg = errMsg;
       }
     }
   }
 
-  return { success: false, error: lastErrorMsg };
+  addStep('Все альтернативные браузерные провайдеры записи исчерпали попытки', 'error');
+  return { success: false, error: lastErrorMsg, steps };
 }
 
 export interface TestTokenResult {
@@ -299,12 +328,23 @@ export async function testYandexToken(token: string): Promise<TestTokenResult> {
 // Download database from Yandex.Disk
 export async function downloadYandexDoc(token: string): Promise<DownloadResult> {
   const cleanToken = token.trim();
+  const steps: SyncStep[] = [];
+  const addStep = (message: string, status: 'info' | 'success' | 'error' = 'info') => {
+    steps.push({ time: new Date().toLocaleTimeString('ru-RU'), message, status });
+  };
+
+  addStep('Запущено скачивание базы данных из облака', 'info');
   try {
+    addStep('Попытка скачивания через защищенный серверный прокси...', 'info');
     const res = await fetch(`/api/yandex/download?token=${encodeURIComponent(cleanToken)}`);
     
     if (res.status === 404) {
-      console.log("Backend download proxy not found (404), falling back to client-side direct...");
-      return await downloadDirectFromClient(cleanToken);
+      addStep('Прокси-сервер вернул статус 404 (не найден). Переход на прямой метод.', 'error');
+      const fallbackResult = await downloadDirectFromClient(cleanToken);
+      return { 
+        ...fallbackResult, 
+        steps: [...steps, ...(fallbackResult.steps || [])] 
+      };
     }
 
     if (!res.ok) {
@@ -312,38 +352,70 @@ export async function downloadYandexDoc(token: string): Promise<DownloadResult> 
       try {
         const errorJson = await res.json();
         errMessage = errorJson.error || errMessage;
-      } catch {
-        // Fallback if not a json error
+      } catch {}
+      addStep(`Ошибка прокси-сервера: ${errMessage}`, 'error');
+      
+      addStep('Попытка резервной прямой загрузки в обход сервера...', 'info');
+      const fallbackResult = await downloadDirectFromClient(cleanToken);
+      if (fallbackResult.success) {
+        addStep('Резервная прямая загрузка завершилась успешно!', 'success');
+        return { 
+          ...fallbackResult, 
+          steps: [...steps, ...(fallbackResult.steps || [])] 
+        };
+      } else {
+        addStep(`Резервная прямая загрузка завершилась ошибкой: ${fallbackResult.error}`, 'error');
+        return {
+          success: false,
+          exists: false,
+          data: null,
+          error: `${errMessage}. Резервный метод: ${fallbackResult.error}`,
+          steps: [...steps, ...(fallbackResult.steps || [])]
+        };
       }
-      // If we got a real non-ok response from our backend, do NOT fall back to client-side direct block
-      // as it will only throw CORS download / IP mismatches.
-      return { success: false, exists: false, data: null, error: errMessage };
     }
 
     const result = await res.json();
     if (result.exists) {
-      return { success: true, exists: true, data: result.data };
+      addStep('База успешно скачана из облака через прокси-сервер', 'success');
+      return { success: true, exists: true, data: result.data, steps };
     } else {
-      return { success: true, exists: false, data: null };
+      addStep('База данных отсутствует на Диске. Будет создана при первом сохранении.', 'info');
+      return { success: true, exists: false, data: null, steps };
     }
   } catch (e: any) {
-    console.warn('Failed backend download from Yandex Disk, attempting direct download...', e);
-    // On server outage or browser offline, fall back to direct download
+    const errorStr = e?.message || String(e);
+    addStep(`Сбой соединения с прокси-сервером: ${errorStr}`, 'error');
+    
+    addStep('Попытка резервной прямой загрузки в обход сервера...', 'info');
     const fallbackResult = await downloadDirectFromClient(cleanToken);
     if (!fallbackResult.success) {
+      addStep(`Резервная прямая загрузка завершилась ошибкой: ${fallbackResult.error}`, 'error');
       return {
         ...fallbackResult,
-        error: `Прокси недоступен (${e?.message || e}). Резервный метод: ${fallbackResult.error}`
+        error: `Прокси недоступен (${errorStr}). Резервный метод: ${fallbackResult.error}`,
+        steps: [...steps, ...(fallbackResult.steps || [])]
       };
     }
-    return fallbackResult;
+    addStep('Резервная прямая загрузка завершилась успешно!', 'success');
+    return {
+      ...fallbackResult,
+      steps: [...steps, ...(fallbackResult.steps || [])]
+    };
   }
 }
 
 // Upload database to Yandex.Disk
-export async function uploadYandexDoc(token: string, db: CloudDatabase): Promise<{ success: boolean; error?: string }> {
+export async function uploadYandexDoc(token: string, db: CloudDatabase): Promise<{ success: boolean; error?: string; steps?: SyncStep[] }> {
   const cleanToken = token.trim();
+  const steps: SyncStep[] = [];
+  const addStep = (message: string, status: 'info' | 'success' | 'error' = 'info') => {
+    steps.push({ time: new Date().toLocaleTimeString('ru-RU'), message, status });
+  };
+
+  addStep('Запущен экспорт базы данных в облако', 'info');
   try {
+    addStep('Отправка обновленной базы через серверный прокси...', 'info');
     const res = await fetch('/api/yandex/upload', {
       method: 'POST',
       headers: {
@@ -353,8 +425,12 @@ export async function uploadYandexDoc(token: string, db: CloudDatabase): Promise
     });
 
     if (res.status === 404) {
-      console.log("Backend upload proxy not found (404), falling back to client-side direct...");
-      return await uploadDirectFromClient(cleanToken, db);
+      addStep('Прокси-сервер вернул 404 (не найден). Переход на прямой метод отправки.', 'error');
+      const fallbackResult = await uploadDirectFromClient(cleanToken, db);
+      return { 
+        ...fallbackResult, 
+        steps: [...steps, ...(fallbackResult.steps || [])] 
+      };
     }
 
     if (!res.ok) {
@@ -362,22 +438,47 @@ export async function uploadYandexDoc(token: string, db: CloudDatabase): Promise
       try {
         const errorJson = await res.json();
         errMessage = errorJson.error || errMessage;
-      } catch {
-        // Fallback
+      } catch {}
+      addStep(`Ошибка прокси-сервера: ${errMessage}`, 'error');
+      
+      addStep('Попытка резервной прямой выгрузки в обход сервера...', 'info');
+      const fallbackResult = await uploadDirectFromClient(cleanToken, db);
+      if (fallbackResult.success) {
+        addStep('Резервная прямая выгрузка совершена успешно!', 'success');
+        return { 
+          ...fallbackResult, 
+          steps: [...steps, ...(fallbackResult.steps || [])] 
+        };
+      } else {
+        addStep(`Резервная прямая выгрузка завершилась ошибкой: ${fallbackResult.error}`, 'error');
+        return {
+          success: false,
+          error: `${errMessage}. Резервный метод: ${fallbackResult.error}`,
+          steps: [...steps, ...(fallbackResult.steps || [])]
+        };
       }
-      return { success: false, error: errMessage };
     }
-    return { success: true };
+    addStep('База данных успешно сохранена в облаке через прокси-сервер', 'success');
+    return { success: true, steps };
   } catch (e: any) {
-    console.warn('Failed backend upload to Yandex Disk, attempting direct upload...', e);
+    const errorStr = e?.message || String(e);
+    addStep(`Сбой соединения с прокси-сервером: ${errorStr}`, 'error');
+    
+    addStep('Попытка резервной прямой выгрузки в обход сервера...', 'info');
     const fallbackResult = await uploadDirectFromClient(cleanToken, db);
     if (!fallbackResult.success) {
+      addStep(`Резервная прямая выгрузка завершилась ошибкой: ${fallbackResult.error}`, 'error');
       return {
         success: false,
-        error: `Прокси недоступен (${e?.message || e}). Резервный метод: ${fallbackResult.error}`
+        error: `Прокси недоступен (${errorStr}). Резервный метод: ${fallbackResult.error}`,
+        steps: [...steps, ...(fallbackResult.steps || [])]
       };
     }
-    return fallbackResult;
+    addStep('Резервная прямая выгрузка совершена успешно!', 'success');
+    return {
+      ...fallbackResult,
+      steps: [...steps, ...(fallbackResult.steps || [])]
+    };
   }
 }
 

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { X, Key, Cloud, CheckCircle2, HelpCircle, AlertTriangle, RefreshCw, Copy, ExternalLink } from 'lucide-react';
 import { testYandexToken } from '../lib/yandexDisk';
 
@@ -10,6 +10,7 @@ interface YandexSyncSettingsProps {
   onClearToken: () => void;
   syncStatus: 'syncing' | 'synced' | 'local' | 'error';
   syncErrorMessage?: string;
+  syncSteps?: Array<{ time: string; message: string; status: 'info' | 'success' | 'error' }>;
   onForceSync: () => Promise<void>;
 }
 
@@ -21,6 +22,7 @@ export default function YandexSyncSettings({
   onClearToken,
   syncStatus,
   syncErrorMessage,
+  syncSteps = [],
   onForceSync
 }: YandexSyncSettingsProps) {
   const [inputToken, setInputToken] = useState(token);
@@ -29,6 +31,13 @@ export default function YandexSyncSettings({
   const [showInstructions, setShowInstructions] = useState(true);
   const [clientId, setClientId] = useState('');
   const [copiedLink, setCopiedLink] = useState(false);
+  const [showLogs, setShowLogs] = useState(syncStatus === 'error');
+
+  useEffect(() => {
+    if (syncStatus === 'error') {
+      setShowLogs(true);
+    }
+  }, [syncStatus]);
 
   if (!isOpen) return null;
 
@@ -142,6 +151,41 @@ export default function YandexSyncSettings({
                 {syncStatus === 'error' && syncErrorMessage && (
                   <div className="p-2.5 rounded bg-rose-500/5 border border-rose-500/10 text-rose-300 font-mono text-[10px] break-words text-left leading-relaxed mt-1">
                     <span className="font-semibold text-rose-400">Детали ошибки:</span> {syncErrorMessage}
+                  </div>
+                )}
+
+                {syncSteps && syncSteps.length > 0 && (
+                  <div className="mt-3 border border-[#2b2b2b] rounded-lg bg-[#141414] overflow-hidden text-[11px] font-sans">
+                    <button
+                      type="button"
+                      onClick={() => setShowLogs(!showLogs)}
+                      className="bg-[#1e1e1e] hover:bg-[#222222] border-b border-[#2b2b2b] px-3 py-2 flex items-center justify-between text-neutral-300 w-full transition-all cursor-pointer text-left"
+                    >
+                      <span className="font-semibold tracking-tight flex items-center gap-1.5 text-neutral-200">
+                        <AlertTriangle className={`w-3.5 h-3.5 text-yellow-500 ${syncStatus === 'error' ? 'text-rose-500 animate-pulse' : ''}`} />
+                        Детальный лог синхронизации:
+                      </span>
+                      <span className="text-[10px] text-yellow-500 underline font-mono select-none">
+                        {showLogs ? 'Скрыть ▴' : 'Развернуть ▾'}
+                      </span>
+                    </button>
+                    {showLogs && (
+                      <div className="p-3.5 space-y-2 max-h-56 overflow-y-auto font-mono text-[10px] sm:text-[10.5px] scrollbar-thin leading-relaxed">
+                        {syncSteps.map((step, idx) => (
+                          <div key={idx} className="flex gap-2 text-left items-start">
+                            <span className="text-neutral-500 select-none whitespace-nowrap">[{step.time}]</span>
+                            <span className={
+                              step.status === 'success' ? 'text-emerald-400 font-semibold' :
+                              step.status === 'error' ? 'text-rose-400 font-semibold' :
+                              'text-neutral-300'
+                            }>
+                              {step.status === 'success' ? '✓ ' : step.status === 'error' ? '✗ ' : '· '}
+                              {step.message}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

@@ -86,6 +86,17 @@ export default function App() {
   // Dynamic sync status indicator
   const [syncStatus, setSyncStatus] = useState<'syncing' | 'synced' | 'local' | 'error'>('local');
   const [syncErrorMessage, setSyncErrorMessage] = useState<string>('');
+  const [syncSteps, setSyncSteps] = useState<any[]>(() => {
+    const stored = localStorage.getItem('yandex_sync_steps');
+    if (stored) {
+      try {
+        return JSON.parse(stored);
+      } catch {
+        return [];
+      }
+    }
+    return [];
+  });
 
   // Simple, elegant global toast system
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'info' | 'error' } | null>(null);
@@ -115,10 +126,16 @@ export default function App() {
 
     setSyncStatus('syncing');
     setSyncErrorMessage('');
+    let downloadResult: any = null;
     try {
       // 1. Download database from Yandex.Disk
-      const downloadResult = await downloadYandexDoc(token);
+      downloadResult = await downloadYandexDoc(token);
       
+      if (downloadResult.steps) {
+        setSyncSteps(downloadResult.steps);
+        localStorage.setItem('yandex_sync_steps', JSON.stringify(downloadResult.steps));
+      }
+
       if (!downloadResult.success) {
         // If there was a network/CDN error, DO NOT initialize or overwrite! Just show error and abort.
         console.warn('Yandex.Disk pull failed (network or request error). Aborting upload to avoid dataloss.', downloadResult.error);
@@ -127,6 +144,8 @@ export default function App() {
         showToast('Ошибка сетевого диска. Синхронизация отложена.', 'error');
         return;
       }
+
+      let finalSteps = downloadResult.steps || [];
 
       if (downloadResult.exists && downloadResult.data) {
         const remoteDb = downloadResult.data;
@@ -158,6 +177,12 @@ export default function App() {
           updatedAt: Date.now()
         });
 
+        if (uploadResult.steps) {
+          finalSteps = [...finalSteps, ...uploadResult.steps];
+          setSyncSteps(finalSteps);
+          localStorage.setItem('yandex_sync_steps', JSON.stringify(finalSteps));
+        }
+
         if (uploadResult.success) {
           setSyncStatus('synced');
           setSyncErrorMessage('');
@@ -177,6 +202,12 @@ export default function App() {
           updatedAt: Date.now()
         });
 
+        if (uploadResult.steps) {
+          finalSteps = [...finalSteps, ...uploadResult.steps];
+          setSyncSteps(finalSteps);
+          localStorage.setItem('yandex_sync_steps', JSON.stringify(finalSteps));
+        }
+
         if (uploadResult.success) {
           setSyncStatus('synced');
           setSyncErrorMessage('');
@@ -189,6 +220,14 @@ export default function App() {
       console.error('Error during Yandex.Disk cloud sync:', e);
       setSyncStatus('error');
       setSyncErrorMessage(e?.message || 'Неизвестная ошибка во время синхронизации.');
+      const errStep = {
+        time: new Date().toLocaleTimeString('ru-RU'),
+        message: `Критический сбой синхронизации: ${e?.message || 'Неизвестная ошибка'}`,
+        status: 'error' as const
+      };
+      const updated = [...(downloadResult?.steps || []), errStep];
+      setSyncSteps(updated);
+      localStorage.setItem('yandex_sync_steps', JSON.stringify(updated));
     }
   };
 
@@ -702,6 +741,7 @@ export default function App() {
         onClearToken={handleClearYandexToken}
         syncStatus={syncStatus}
         syncErrorMessage={syncErrorMessage}
+        syncSteps={syncSteps}
         onForceSync={() => triggerCloudSync(items, partsText, deletedIds, ydToken)}
       />
 
