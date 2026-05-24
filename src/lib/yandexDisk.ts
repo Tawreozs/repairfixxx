@@ -142,7 +142,7 @@ async function downloadDirectFromClient(token: string): Promise<DownloadResult> 
 }
 
 // Helper to perform client-side upload direct to Yandex Disk
-async function uploadDirectFromClient(token: string, db: CloudDatabase): Promise<boolean> {
+async function uploadDirectFromClient(token: string, db: CloudDatabase): Promise<{ success: boolean; error?: string }> {
   const pathCandidates = ['app:/repair_db.json', 'disk:/repair_db.json'];
   
   // To avoid IP mismatch blocks on upload target node, we MUST request both
@@ -153,6 +153,8 @@ async function uploadDirectFromClient(token: string, db: CloudDatabase): Promise
     { name: 'allorigins', wrap: (url: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}` },
     { name: 'codetabs', wrap: (url: string) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}` }
   ];
+
+  let lastErrorMsg = 'Не удалось найти работающий способ подключения для отправки';
 
   for (const provider of flowProviders) {
     console.log(`Trying client-side upload flow using provider: ${provider.name}`);
@@ -190,18 +192,19 @@ async function uploadDirectFromClient(token: string, db: CloudDatabase): Promise
 
         if (uploadRes.ok) {
           console.log(`Successfully uploaded to ${path} using provider ${provider.name}`);
-          return true;
+          return { success: true };
         } else {
           throw new Error(`Upload node returned status ${uploadRes.status}`);
         }
-      } catch (err) {
+      } catch (err: any) {
         console.warn(`Upload flow failed for provider ${provider.name} and path ${path}:`, err);
+        lastErrorMsg = err?.message || String(err);
         // Continue to the next path/provider
       }
     }
   }
 
-  return false;
+  return { success: false, error: lastErrorMsg };
 }
 
 export interface TestTokenResult {
@@ -312,7 +315,9 @@ export async function downloadYandexDoc(token: string): Promise<DownloadResult> 
       } catch {
         // Fallback if not a json error
       }
-      throw new Error(errMessage);
+      // If we got a real non-ok response from our backend, do NOT fall back to client-side direct block
+      // as it will only throw CORS download / IP mismatches.
+      return { success: false, exists: false, data: null, error: errMessage };
     }
 
     const result = await res.json();
@@ -323,12 +328,20 @@ export async function downloadYandexDoc(token: string): Promise<DownloadResult> 
     }
   } catch (e: any) {
     console.warn('Failed backend download from Yandex Disk, attempting direct download...', e);
-    return await downloadDirectFromClient(cleanToken);
+    // On server outage or browser offline, fall back to direct download
+    const fallbackResult = await downloadDirectFromClient(cleanToken);
+    if (!fallbackResult.success) {
+      return {
+        ...fallbackResult,
+        error: `Прокси недоступен (${e?.message || e}). Резервный метод: ${fallbackResult.error}`
+      };
+    }
+    return fallbackResult;
   }
 }
 
 // Upload database to Yandex.Disk
-export async function uploadYandexDoc(token: string, db: CloudDatabase): Promise<boolean> {
+export async function uploadYandexDoc(token: string, db: CloudDatabase): Promise<{ success: boolean; error?: string }> {
   const cleanToken = token.trim();
   try {
     const res = await fetch('/api/yandex/upload', {
@@ -345,13 +358,26 @@ export async function uploadYandexDoc(token: string, db: CloudDatabase): Promise
     }
 
     if (!res.ok) {
-      console.error(`Failed to upload to server proxy: responded with ${res.status}`);
-      return false;
+      let errMessage = `Ошибка записи: статус ${res.status}`;
+      try {
+        const errorJson = await res.json();
+        errMessage = errorJson.error || errMessage;
+      } catch {
+        // Fallback
+      }
+      return { success: false, error: errMessage };
     }
-    return true;
-  } catch (e) {
+    return { success: true };
+  } catch (e: any) {
     console.warn('Failed backend upload to Yandex Disk, attempting direct upload...', e);
-    return await uploadDirectFromClient(cleanToken, db);
+    const fallbackResult = await uploadDirectFromClient(cleanToken, db);
+    if (!fallbackResult.success) {
+      return {
+        success: false,
+        error: `Прокси недоступен (${e?.message || e}). Резервный метод: ${fallbackResult.error}`
+      };
+    }
+    return fallbackResult;
   }
 }
 

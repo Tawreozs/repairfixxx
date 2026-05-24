@@ -151,14 +151,14 @@ export default function App() {
         setDeletedIds(mergedDeletedIds);
 
         // 4. Save newly merged consolidated DB back to cloud
-        const uploadSuccess = await uploadYandexDoc(token, {
+        const uploadResult = await uploadYandexDoc(token, {
           items: mergedItems,
           partsText: mergedPartsText,
           deletedIds: mergedDeletedIds,
           updatedAt: Date.now()
         });
 
-        if (uploadSuccess) {
+        if (uploadResult.success) {
           setSyncStatus('synced');
           setSyncErrorMessage('');
           if (hasNewIncomingItems || hasNewPartsText) {
@@ -166,23 +166,23 @@ export default function App() {
           }
         } else {
           setSyncStatus('error');
-          setSyncErrorMessage('Не удалось отправить обновленные данные на Диск.');
+          setSyncErrorMessage(uploadResult.error || 'Не удалось отправить обновленные данные на Диск.');
         }
       } else {
         // First sync on empty disk / file doesn't exist yet: initialize with current state
-        const uploadSuccess = await uploadYandexDoc(token, {
+        const uploadResult = await uploadYandexDoc(token, {
           items: currentItems,
           partsText: currentParts,
           deletedIds: currentDeleted,
           updatedAt: Date.now()
         });
 
-        if (uploadSuccess) {
+        if (uploadResult.success) {
           setSyncStatus('synced');
           setSyncErrorMessage('');
         } else {
           setSyncStatus('error');
-          setSyncErrorMessage('Не удалось создать базу данных в папке приложения на Диске.');
+          setSyncErrorMessage(uploadResult.error || 'Не удалось создать базу данных в папке приложения на Диске.');
         }
       }
     } catch (e: any) {
