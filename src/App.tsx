@@ -375,35 +375,12 @@ export default function App() {
     }
   };
 
-  // Run backend data loader OR Cloud sync on load
+  // Run Cloud sync on load (if configured)
   useEffect(() => {
     if (isCloudActive()) {
       triggerCloudSync(items, partsText, deletedIds);
     } else {
-      // Fallback: If no cloud connected, query the local node server
-      const fetchBackendData = async () => {
-        setSyncStatus('syncing');
-        try {
-          const response = await fetch('/api/repairs');
-          if (response.ok) {
-            const data = await response.json();
-            setItems(data);
-            
-            const partsRes = await fetch('/api/parts');
-            if (partsRes.ok) {
-              const partsData = await partsRes.json();
-              setPartsText(partsData.partsText);
-            }
-            setSyncStatus('synced');
-          } else {
-            setSyncStatus('local');
-          }
-        } catch (e) {
-          console.warn('Backend server offline, relying on LocalStorage fallback.', e);
-          setSyncStatus('local');
-        }
-      };
-      fetchBackendData();
+      setSyncStatus('local');
     }
   }, [ydToken, ghToken, ghRepo, syncProvider]);
 
@@ -511,22 +488,11 @@ export default function App() {
     const updatedItems = [newItem, ...items];
     setItems(updatedItems);
 
-    // 1. Save to Cloud (if active)
+    // Save to Cloud (if active)
     if (isCloudActive()) {
       triggerCloudSync(updatedItems, partsText, deletedIds);
     } else {
-      // 2. Save directly to local Node express backend
-      try {
-        const res = await fetch('/api/repairs', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(newItem)
-        });
-        if (res.ok) setSyncStatus('synced');
-        else setSyncStatus('error');
-      } catch (e) {
-        setSyncStatus('error');
-      }
+      setSyncStatus('synced');
     }
   };
 
@@ -541,17 +507,7 @@ export default function App() {
     if (isCloudActive()) {
       triggerCloudSync(updatedItems, partsText, deletedIds);
     } else {
-      try {
-        const res = await fetch(`/api/repairs/${updated.id}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(updatedWithTime)
-        });
-        if (res.ok) setSyncStatus('synced');
-        else setSyncStatus('error');
-      } catch (e) {
-        setSyncStatus('error');
-      }
+      setSyncStatus('synced');
     }
   };
 
@@ -574,18 +530,8 @@ export default function App() {
 
     if (isCloudActive()) {
       triggerCloudSync(updatedItems, partsText, deletedIds);
-    } else if (targetItem) {
-      try {
-        const res = await fetch(`/api/repairs/${id}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(targetItem)
-        });
-        if (res.ok) setSyncStatus('synced');
-        else setSyncStatus('error');
-      } catch (e) {
-        setSyncStatus('error');
-      }
+    } else {
+      setSyncStatus('synced');
     }
   };
 
@@ -604,18 +550,8 @@ export default function App() {
 
     if (isCloudActive()) {
       triggerCloudSync(updatedItems, partsText, deletedIds);
-    } else if (targetItem) {
-      try {
-        const res = await fetch(`/api/repairs/${id}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(targetItem)
-        });
-        if (res.ok) setSyncStatus('synced');
-        else setSyncStatus('error');
-      } catch (e) {
-        setSyncStatus('error');
-      }
+    } else {
+      setSyncStatus('synced');
     }
   };
 
@@ -634,15 +570,7 @@ export default function App() {
     if (isCloudActive()) {
       triggerCloudSync(updatedItems, partsText, updatedDeleted);
     } else {
-      try {
-        const res = await fetch(`/api/repairs/${id}`, {
-          method: 'DELETE'
-        });
-        if (res.ok) setSyncStatus('synced');
-        else setSyncStatus('error');
-      } catch (e) {
-        setSyncStatus('error');
-      }
+      setSyncStatus('synced');
     }
   };
 
@@ -653,17 +581,7 @@ export default function App() {
     if (isCloudActive()) {
       triggerCloudSync(items, newText, deletedIds);
     } else {
-      try {
-        const res = await fetch('/api/parts', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ partsText: newText })
-        });
-        if (res.ok) setSyncStatus('synced');
-        else setSyncStatus('error');
-      } catch (e) {
-        setSyncStatus('error');
-      }
+      setSyncStatus('synced');
     }
   };
 
@@ -693,24 +611,10 @@ export default function App() {
           }
           alert('Резервная копия успешно загружена!');
           
-          if (ydToken) {
-            triggerCloudSync(json.items, json.partsText || '', json.deletedIds || [], ydToken);
+          if (ydToken || ghToken) {
+            triggerCloudSync(json.items, json.partsText || '', json.deletedIds || [], ydToken || undefined);
           } else {
-            setSyncStatus('syncing');
-            try {
-              const res = await fetch('/api/backup/import', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(json)
-              });
-              if (res.ok) {
-                setSyncStatus('synced');
-              } else {
-                setSyncStatus('error');
-              }
-            } catch (err) {
-              setSyncStatus('local');
-            }
+            setSyncStatus('synced');
           }
         } else {
           alert('Неверный формат резервной копии. Должен быть JSON файл с полем "items".');

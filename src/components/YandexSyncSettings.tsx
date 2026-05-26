@@ -744,7 +744,7 @@ export default function YandexSyncSettings({
                   <div>
                     <h4 className="text-sm font-semibold text-white">Интеграция с GitHub</h4>
                     <p className="text-xs text-neutral-400 mt-1 max-w-xs mx-auto">
-                      Самый надежный и профессиональный способ хранить базу данных на любом устройстве без блокировок и лимитов прокси.
+                      Самый надежный и профессиональный способ хранить базу данных на любом устройстве напрямую, без дополнительных серверов.
                     </p>
                   </div>
                   <button
