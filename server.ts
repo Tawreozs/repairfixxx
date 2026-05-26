@@ -205,6 +205,164 @@ app.post("/api/backup/import", (req, res) => {
   res.json({ success: true });
 });
 
+// GitHub Proxy APIs to completely eliminate client-side CORS, network, or sandbox issues
+app.get("/api/github/test", async (req, res) => {
+  const token = (req.query.token as string)?.trim();
+  const repo = (req.query.repo as string)?.trim();
+  if (!token || !repo) {
+    return res.status(400).json({ success: false, error: 'Токен или репозиторий отсутствует' });
+  }
+
+  try {
+    // 1. Check user auth
+    const userRes = await secureFetch('https://api.github.com/user', {
+      headers: {
+        'Accept': 'application/vnd.github.v3+json',
+        'Authorization': `token ${token}`
+      }
+    });
+
+    if (!userRes.ok) {
+      if (userRes.status === 401) {
+        return res.json({ success: false, error: 'Ошибка 401: Токен GitHub недействителен или истек.' });
+      }
+      return res.json({ success: false, error: `GitHub вернул код ${userRes.status} при проверке пользователя.` });
+    }
+
+    const userData: any = await userRes.json();
+    const username = userData.login || 'Пользователь';
+
+    // 2. Check repo access
+    const repoRes = await secureFetch(`https://api.github.com/repos/${repo}`, {
+      headers: {
+        'Accept': 'application/vnd.github.v3+json',
+        'Authorization': `token ${token}`
+      }
+    });
+
+    if (!repoRes.ok) {
+      if (repoRes.status === 404) {
+        return res.json({ success: false, error: `Внимание: репозиторий "${repo}" не найден. Убедитесь, что репозиторий создан в GitHub и токен имеет права доступа.` });
+      }
+      return res.json({ success: false, error: `Репозиторий недоступен: код ${repoRes.status}` });
+    }
+
+    const repoData: any = await repoRes.json();
+    const permissions = repoData.permissions;
+
+    if (permissions && !permissions.push) {
+      return res.json({
+        success: true,
+        username: `${username} (Чтение/Ограниченный доступ)`,
+        error: 'Внимание: у токена нет прав на запись (push) в репозиторий!'
+      });
+    }
+
+    return res.json({ success: true, username: `${username} (Полный доступ)` });
+  } catch (e: any) {
+    console.error("Github test error on server:", e);
+    res.json({ success: false, error: e?.message || 'Сетевая ошибка при связи с GitHub' });
+  }
+});
+
+app.get("/api/github/download", async (req, res) => {
+  const token = (req.query.token as string)?.trim();
+  const repo = (req.query.repo as string)?.trim();
+  const pathVal = (req.query.path as string)?.trim() || 'repair_db.json';
+
+  if (!token || !repo) {
+    return res.status(400).json({ error: 'Токен или репозиторий отсутствует' });
+  }
+
+  try {
+    const resFile = await secureFetch(`https://api.github.com/repos/${repo}/contents/${pathVal}`, {
+      headers: {
+        'Accept': 'application/vnd.github.v3+json',
+        'Authorization': `token ${token}`,
+        'Cache-Control': 'no-cache',
+        'Pragma': 'no-cache'
+      }
+    });
+
+    if (resFile.status === 404) {
+      return res.json({ exists: false });
+    }
+
+    if (!resFile.ok) {
+      let errMessage = `Код ответа GitHub: ${resFile.status}`;
+      try {
+        const errorJson = await resFile.json();
+        errMessage = errorJson.message || errMessage;
+      } catch {}
+      return res.status(resFile.status).json({ error: errMessage });
+    }
+
+    const fileMeta: any = await resFile.json();
+    if (fileMeta.type !== 'file') {
+      return res.status(400).json({ error: `Путь "${pathVal}" ведет не к файлу, а к ${fileMeta.type}` });
+    }
+
+    return res.json({ 
+      exists: true, 
+      content: fileMeta.content || '', 
+      sha: fileMeta.sha || '' 
+    });
+  } catch (e: any) {
+    console.error("GitHub download error on server:", e);
+    res.status(500).json({ error: e?.message || 'Ошибка сервера при скачивании с GitHub.' });
+  }
+});
+
+app.post("/api/github/upload", async (req, res) => {
+  const { token, repo, path: pathVal, content, sha } = req.body;
+  const cleanToken = token?.trim();
+  const cleanRepo = repo?.trim();
+  const cleanPath = pathVal?.trim() || 'repair_db.json';
+
+  if (!cleanToken || !cleanRepo || !content) {
+    return res.status(400).json({ error: 'Параметры отсутствуют или некорректны' });
+  }
+
+  try {
+    const body: any = {
+      message: `Sync service update: ${new Date().toLocaleString('ru-RU')}`,
+      content: content
+    };
+
+    if (sha) {
+      body.sha = sha;
+    }
+
+    const resCommit = await secureFetch(`https://api.github.com/repos/${cleanRepo}/contents/${cleanPath}`, {
+      method: 'PUT',
+      headers: {
+        'Accept': 'application/vnd.github.v3+json',
+        'Content-Type': 'application/json',
+        'Authorization': `token ${cleanToken}`
+      },
+      body: JSON.stringify(body)
+    });
+
+    if (!resCommit.ok) {
+      let errMessage = `Статус ${resCommit.status}`;
+      try {
+        const errJson = await resCommit.json();
+        errMessage = errJson.message || errMessage;
+      } catch {}
+      return res.status(resCommit.status).json({ error: errMessage });
+    }
+
+    const resData: any = await resCommit.json();
+    return res.json({ 
+      success: true, 
+      sha: resData.content?.sha || '' 
+    });
+  } catch (e: any) {
+    console.error("GitHub upload error on server:", e);
+    res.status(500).json({ error: e?.message || 'Ошибка сервера при записи коммита на GitHub.' });
+  }
+});
+
 // Yandex Disk Proxy APIs to completely eliminate client-side CORS / sandbox issues
 app.get("/api/yandex/test", async (req, res) => {
   const token = (req.query.token as string)?.trim();

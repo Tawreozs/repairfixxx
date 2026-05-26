@@ -23,20 +23,11 @@ export interface GithubTestResult {
   error?: string;
 }
 
-// Test GitHub access token and repository suitability
-export async function testGithubToken(token: string, repo: string): Promise<GithubTestResult> {
+// Helper to make direct GitHub verification requests from the browser
+async function testGithubTokenDirectly(token: string, repo: string): Promise<GithubTestResult> {
   const cleanToken = token.trim();
   const cleanRepo = repo.trim();
-
-  if (!cleanToken) {
-    return { success: false, error: 'Токен GitHub отсутствует' };
-  }
-  if (!cleanRepo || !cleanRepo.includes('/')) {
-    return { success: false, error: 'Репозиторий должен быть в формате: владелец/имя (например, ivan/my-db)' };
-  }
-
   try {
-    // 1. Test user/auth
     const userRes = await fetch('https://api.github.com/user', {
       headers: {
         'Accept': 'application/vnd.github.v3+json',
@@ -54,7 +45,6 @@ export async function testGithubToken(token: string, repo: string): Promise<Gith
     const userData = await userRes.json();
     const username = userData.login || 'Пользователь';
 
-    // 2. Test repository writing/reading permissions by getting repository metadata
     const repoRes = await fetch(`https://api.github.com/repos/${cleanRepo}`, {
       headers: {
         'Accept': 'application/vnd.github.v3+json',
@@ -82,13 +72,41 @@ export async function testGithubToken(token: string, repo: string): Promise<Gith
 
     return { success: true, username: `${username} (Полный доступ)` };
   } catch (e: any) {
-    console.error('Github auth test failed', e);
-    return { success: false, error: `Сбой сети при связи с GitHub: ${e?.message || e}` };
+    console.error('Github auth test directly failed', e);
+    return { success: false, error: `Сбой сети при связи с GitHub напрямую: ${e?.message || e}` };
   }
 }
 
-// Download database file from GitHub
-export async function downloadGithubDoc(token: string, repo: string, path: string = 'repair_db.json'): Promise<DownloadResult> {
+// Test GitHub access token and repository suitability
+export async function testGithubToken(token: string, repo: string): Promise<GithubTestResult> {
+  const cleanToken = token.trim();
+  const cleanRepo = repo.trim();
+
+  if (!cleanToken) {
+    return { success: false, error: 'Токен GitHub отсутствует' };
+  }
+  if (!cleanRepo || !cleanRepo.includes('/')) {
+    return { success: false, error: 'Репозиторий должен быть в формате: владелец/имя (например, ivan/my-db)' };
+  }
+
+  try {
+    const res = await fetch(`/api/github/test?token=${encodeURIComponent(cleanToken)}&repo=${encodeURIComponent(cleanRepo)}`);
+    if (res.status === 404) {
+      console.log('Backend GitHub test endpoint returned 404, testing directly on client...');
+      return await testGithubTokenDirectly(cleanToken, cleanRepo);
+    }
+    if (!res.ok) {
+      throw new Error(`Код статуса прокси: ${res.status}`);
+    }
+    return await res.json();
+  } catch (err: any) {
+    console.warn('Backend GitHub proxy test failed, trying direct browser-api test...', err);
+    return await testGithubTokenDirectly(cleanToken, cleanRepo);
+  }
+}
+
+// Helper to make direct GitHub file downloads from the browser
+async function downloadDirectFromClient(token: string, repo: string, path: string): Promise<DownloadResult> {
   const cleanToken = token.trim();
   const cleanRepo = repo.trim();
   const cleanPath = path.trim() || 'repair_db.json';
@@ -98,14 +116,13 @@ export async function downloadGithubDoc(token: string, repo: string, path: strin
     steps.push({ time: new Date().toLocaleTimeString('ru-RU'), message, status });
   };
 
-  addStep('Запущено скачивание базы данных из GitHub', 'info');
+  addStep('Начало прямого скачивания с GitHub через браузер', 'info');
   try {
     addStep(`Запрос файла "${cleanPath}" в репозитории "${cleanRepo}"...`, 'info');
     const res = await fetch(`https://api.github.com/repos/${cleanRepo}/contents/${cleanPath}`, {
       headers: {
         'Accept': 'application/vnd.github.v3+json',
         'Authorization': `token ${cleanToken}`,
-        // Anti-caching headers so client always gets latest file from branch live
         'Cache-Control': 'no-cache',
         'Pragma': 'no-cache'
       }
@@ -122,7 +139,7 @@ export async function downloadGithubDoc(token: string, repo: string, path: strin
         const errorJson = await res.json();
         errMessage = errorJson.message || errMessage;
       } catch {}
-      addStep(`Ошибка загрузки: ${errMessage}`, 'error');
+      addStep(`Ошибка загрузки напрямую: ${errMessage}`, 'error');
       return { success: false, exists: false, data: null, error: errMessage, steps };
     }
 
@@ -131,7 +148,6 @@ export async function downloadGithubDoc(token: string, repo: string, path: strin
       throw new Error(`Указанный путь "${cleanPath}" ведет не к файлу, а к ${fileMeta.type}`);
     }
 
-    // Capture the SHA hash of the file to save in localStorage for future updates
     if (fileMeta.sha) {
       localStorage.setItem(`github_sha_${cleanRepo}_${cleanPath}`, fileMeta.sha);
     }
@@ -141,18 +157,194 @@ export async function downloadGithubDoc(token: string, repo: string, path: strin
     const text = base64ToUtf8(b64Content);
     const data = JSON.parse(text);
 
-    addStep('База данных успешно скачана из GitHub и расшифрована!', 'success');
+    addStep('База успешно скачана из GitHub напрямую и расшифрована!', 'success');
     return { success: true, exists: true, data, steps };
   } catch (e: any) {
     const errorStr = e?.message || String(e);
-    addStep(`Отказ при скачивании с GitHub: ${errorStr}`, 'error');
+    addStep(`Отказ при прямом скачивании с GitHub: ${errorStr}`, 'error');
+    return { success: false, exists: false, data: null, error: errorStr, steps };
+  }
+}
+
+// Download database file from GitHub
+export async function downloadGithubDoc(token: string, repo: string, path: string = 'repair_db.json'): Promise<DownloadResult> {
+  const cleanToken = token.trim();
+  const cleanRepo = repo.trim();
+  const cleanPath = path.trim() || 'repair_db.json';
+
+  const steps: SyncStep[] = [];
+  const addStep = (message: string, status: 'info' | 'success' | 'error' = 'info') => {
+    steps.push({ time: new Date().toLocaleTimeString('ru-RU'), message, status });
+  };
+
+  addStep('Запущено скачивание базы данных из GitHub', 'info');
+  try {
+    addStep('Попытка скачивания через надежный серверный прокси...', 'info');
+    const res = await fetch(`/api/github/download?token=${encodeURIComponent(cleanToken)}&repo=${encodeURIComponent(cleanRepo)}&path=${encodeURIComponent(cleanPath)}`);
+
+    if (res.status === 404) {
+      addStep('Прокси-сервер вернул статус 404 (не найден). Переход на прямой метод.', 'error');
+      const fallbackResult = await downloadDirectFromClient(cleanToken, cleanRepo, cleanPath);
+      return {
+        ...fallbackResult,
+        steps: [...steps, ...(fallbackResult.steps || [])]
+      };
+    }
+
+    if (!res.ok) {
+      let errMessage = `Отказ прокси-сервера: статус ${res.status}`;
+      try {
+        const errorJson = await res.json();
+        errMessage = errorJson.error || errMessage;
+      } catch {}
+      addStep(`Ошибка прокси-сервера: ${errMessage}`, 'error');
+
+      addStep('Попытка резервной прямой загрузки с GitHub через браузер...', 'info');
+      const fallbackResult = await downloadDirectFromClient(cleanToken, cleanRepo, cleanPath);
+      if (fallbackResult.success) {
+        addStep('Резервная прямая загрузка завершилась успешно!', 'success');
+        return {
+          ...fallbackResult,
+          steps: [...steps, ...(fallbackResult.steps || [])]
+        };
+      } else {
+        addStep(`Резервная прямая загрузка завершилась ошибкой: ${fallbackResult.error}`, 'error');
+        return {
+          success: false,
+          exists: false,
+          data: null,
+          error: `${errMessage}. Резервный метод: ${fallbackResult.error}`,
+          steps: [...steps, ...(fallbackResult.steps || [])]
+        };
+      }
+    }
+
+    const result = await res.json();
+    if (result.exists) {
+      if (result.sha) {
+        localStorage.setItem(`github_sha_${cleanRepo}_${cleanPath}`, result.sha);
+      }
+      
+      addStep('Файл получен из прокси, декодируем...', 'info');
+      const b64Content = result.content || '';
+      const text = base64ToUtf8(b64Content);
+      const data = JSON.parse(text);
+
+      addStep('База успешно скачана из GitHub через прокси-сервер', 'success');
+      return { success: true, exists: true, data, steps };
+    } else {
+      addStep('База данных отсутствует в репозитории. Будет создана при первой отправке.', 'info');
+      return { success: true, exists: false, data: null, steps };
+    }
+  } catch (e: any) {
+    const errorStr = e?.message || String(e);
+    addStep(`Сбой соединения с прокси-сервером: ${errorStr}`, 'error');
+
+    addStep('Попытка резервной прямой загрузки с GitHub через браузер...', 'info');
+    const fallbackResult = await downloadDirectFromClient(cleanToken, cleanRepo, cleanPath);
+    if (!fallbackResult.success) {
+      addStep(`Резервная прямая загрузка завершилась ошибкой: ${fallbackResult.error}`, 'error');
+      return {
+        ...fallbackResult,
+        error: `Прокси недоступен (${errorStr}). Резервный метод: ${fallbackResult.error}`,
+        steps: [...steps, ...(fallbackResult.steps || [])]
+      };
+    }
+    addStep('Резервная прямая загрузка завершилась успешно!', 'success');
     return {
-      success: false,
-      exists: false,
-      data: null,
-      error: errorStr,
-      steps
+      ...fallbackResult,
+      steps: [...steps, ...(fallbackResult.steps || [])]
     };
+  }
+}
+
+// Helper to make direct GitHub file uploads/commits from the browser
+async function uploadDirectFromClient(
+  token: string,
+  repo: string,
+  path: string,
+  db: CloudDatabase
+): Promise<{ success: boolean; error?: string; steps?: SyncStep[] }> {
+  const cleanToken = token.trim();
+  const cleanRepo = repo.trim();
+  const cleanPath = path.trim() || 'repair_db.json';
+
+  const steps: SyncStep[] = [];
+  const addStep = (message: string, status: 'info' | 'success' | 'error' = 'info') => {
+    steps.push({ time: new Date().toLocaleTimeString('ru-RU'), message, status });
+  };
+
+  addStep('Начало прямой выгрузки на GitHub из браузера', 'info');
+  try {
+    addStep('Считывание свежего SHA-хеша...', 'info');
+    let sha: string | null = localStorage.getItem(`github_sha_${cleanRepo}_${cleanPath}`);
+
+    try {
+      const shaRes = await fetch(`https://api.github.com/repos/${cleanRepo}/contents/${cleanPath}`, {
+        headers: {
+          'Accept': 'application/vnd.github.v3+json',
+          'Authorization': `token ${cleanToken}`,
+          'Cache-Control': 'no-cache',
+          'Pragma': 'no-cache'
+        }
+      });
+      if (shaRes.ok) {
+        const fileData = await shaRes.json();
+        if (fileData.sha) {
+          sha = fileData.sha;
+          localStorage.setItem(`github_sha_${cleanRepo}_${cleanPath}`, sha);
+        }
+      } else if (shaRes.status === 404) {
+        sha = null;
+      }
+    } catch {
+      addStep('Используем локальный кэш SHA из-за ошибки сети.', 'info');
+    }
+
+    const jsonString = JSON.stringify(db, null, 2);
+    const b64Content = utf8ToBase64(jsonString);
+
+    const body: any = {
+      message: `Sync service update: ${new Date().toLocaleString('ru-RU')}`,
+      content: b64Content
+    };
+
+    if (sha) {
+      body.sha = sha;
+    }
+
+    addStep('Отправка PUT-запроса коммита напрямую...', 'info');
+    const res = await fetch(`https://api.github.com/repos/${cleanRepo}/contents/${cleanPath}`, {
+      method: 'PUT',
+      headers: {
+        'Accept': 'application/vnd.github.v3+json',
+        'Content-Type': 'application/json',
+        'Authorization': `token ${cleanToken}`
+      },
+      body: JSON.stringify(body)
+    });
+
+    if (!res.ok) {
+      let errMessage = `Статус ${res.status}`;
+      try {
+        const errJson = await res.json();
+        errMessage = errJson.message || errMessage;
+      } catch {}
+      addStep(`GitHub вернул ошибку записи напрямую: ${errMessage}`, 'error');
+      return { success: false, error: errMessage, steps };
+    }
+
+    const resData = await res.json();
+    if (resData.content?.sha) {
+      localStorage.setItem(`github_sha_${cleanRepo}_${cleanPath}`, resData.content.sha);
+    }
+
+    addStep('Коммит успешно отправлен напрямую!', 'success');
+    return { success: true, steps };
+  } catch (e: any) {
+    const errorStr = e?.message || String(e);
+    addStep(`Ошибка прямой отправки на GitHub: ${errorStr}`, 'error');
+    return { success: false, error: errorStr, steps };
   }
 }
 
@@ -174,83 +366,110 @@ export async function uploadGithubDoc(
 
   addStep('Запущен экспорт базы данных в GitHub', 'info');
   try {
-    // 1. We must get the current SHA of the file from GitHub to avoid conflicts (the update requires the parent commit's blob SHA)
-    // Always fetch freshest SHA to support multi-device updates seamlessly!
-    addStep('Считывание свежего SHA-хеша файла для предотвращения конфликтов...', 'info');
-    let sha: string | null = localStorage.getItem(`github_sha_${cleanRepo}_${cleanPath}`);
+    addStep('Попытка отправки коммита через надежный серверный прокси...', 'info');
     
+    // First, fetch freshest SHA via Server Proxy
+    addStep('Считывание свежего SHA-хеша файла для предотвращения конфликтов...', 'info');
+    let sha: string | null = null;
     try {
-      const shaRes = await fetch(`https://api.github.com/repos/${cleanRepo}/contents/${cleanPath}`, {
-        headers: {
-          'Accept': 'application/vnd.github.v3+json',
-          'Authorization': `token ${cleanToken}`,
-          'Cache-Control': 'no-cache',
-          'Pragma': 'no-cache'
-        }
-      });
+      const shaRes = await fetch(`/api/github/download?token=${encodeURIComponent(cleanToken)}&repo=${encodeURIComponent(cleanRepo)}&path=${encodeURIComponent(cleanPath)}`);
       if (shaRes.ok) {
-        const fileData = await shaRes.json();
-        if (fileData.sha) {
-          sha = fileData.sha;
+        const result = await shaRes.json();
+        if (result.exists && result.sha) {
+          sha = result.sha;
           localStorage.setItem(`github_sha_${cleanRepo}_${cleanPath}`, sha);
-          addStep(`Свежий SHA-хеш загружен успешно (${sha.substring(0, 7)}).`, 'info');
+          addStep(`Свежий SHA-хеш загружен через прокси (${sha.substring(0, 7)}).`, 'info');
         }
       } else if (shaRes.status === 404) {
-        sha = null; // file doesn't exist yet, so no SHA is needed
+        sha = null;
         addStep('Файл еще не создан на GitHub. Будет произведено создание.', 'info');
       }
     } catch (e) {
-      console.warn('Could not read existing file SHA, will fall back to local cached SHA', e);
-      addStep('Не удалось связаться с GitHub для проверки SHA, используем локальный кэш.', 'info');
+      sha = localStorage.getItem(`github_sha_${cleanRepo}_${cleanPath}`);
+      addStep('Используем локальный кэш SHA из-за ошибки связи с прокси.', 'info');
     }
 
     // 2. Prepare payload
     const jsonString = JSON.stringify(db, null, 2);
     const b64Content = utf8ToBase64(jsonString);
 
-    const body: any = {
-      message: `Sync service update: ${new Date().toLocaleString('ru-RU')}`,
-      content: b64Content
-    };
-
-    if (sha) {
-      body.sha = sha;
-    }
-
-    addStep('Отправка нового коммита на GitHub...', 'info');
-    const res = await fetch(`https://api.github.com/repos/${cleanRepo}/contents/${cleanPath}`, {
-      method: 'PUT',
+    const uploadRes = await fetch('/api/github/upload', {
+      method: 'POST',
       headers: {
-        'Accept': 'application/vnd.github.v3+json',
-        'Content-Type': 'application/json',
-        'Authorization': `token ${cleanToken}`
+        'Content-Type': 'application/json'
       },
-      body: JSON.stringify(body)
+      body: JSON.stringify({
+        token: cleanToken,
+        repo: cleanRepo,
+        path: cleanPath,
+        content: b64Content,
+        sha: sha
+      })
     });
 
-    if (!res.ok) {
-      let errMessage = `Статус ${res.status}`;
+    if (uploadRes.status === 404) {
+      addStep('Прокси-сервер вернул 404 (не найден). Переход на прямой метод отправки.', 'error');
+      const fallbackResult = await uploadDirectFromClient(cleanToken, cleanRepo, cleanPath, db);
+      return { 
+        ...fallbackResult, 
+        steps: [...steps, ...(fallbackResult.steps || [])] 
+      };
+    }
+
+    if (!uploadRes.ok) {
+      let errMessage = `Ошибка записи через прокси: статус ${uploadRes.status}`;
       try {
-        const errJson = await res.json();
-        errMessage = errJson.message || errMessage;
-        if (res.status === 409) {
+        const errorJson = await uploadRes.json();
+        errMessage = errorJson.error || errMessage;
+        if (uploadRes.status === 409) {
           errMessage = 'Конфликт версий коммита (409 Conflict). Пожалуйста, повторите синхронизацию - система автоматически обновит SHA.';
         }
       } catch {}
-      addStep(`GitHub вернул ошибку записи: ${errMessage}`, 'error');
-      return { success: false, error: errMessage, steps };
+      addStep(`Ошибка прокси-сервера при отправке: ${errMessage}`, 'error');
+      
+      addStep('Попытка резервной прямой выгрузки с GitHub через браузер...', 'info');
+      const fallbackResult = await uploadDirectFromClient(cleanToken, cleanRepo, cleanPath, db);
+      if (fallbackResult.success) {
+        addStep('Резервная прямая выгрузка совершена успешно!', 'success');
+        return { 
+          ...fallbackResult, 
+          steps: [...steps, ...(fallbackResult.steps || [])] 
+        };
+      } else {
+        addStep(`Резервная прямая выгрузка завершилась ошибкой: ${fallbackResult.error}`, 'error');
+        return {
+          success: false,
+          error: `${errMessage}. Резервный метод: ${fallbackResult.error}`,
+          steps: [...steps, ...(fallbackResult.steps || [])]
+        };
+      }
     }
 
-    const resData = await res.json();
-    if (resData.content?.sha) {
-      localStorage.setItem(`github_sha_${cleanRepo}_${cleanPath}`, resData.content.sha);
+    const resData = await uploadRes.json();
+    if (resData.sha) {
+      localStorage.setItem(`github_sha_${cleanRepo}_${cleanPath}`, resData.sha);
     }
 
-    addStep('Коммит успешно создан! Изменения влиты в ветку репозитория.', 'success');
+    addStep('Коммит успешно создан и влит через прокси-сервер!', 'success');
     return { success: true, steps };
   } catch (e: any) {
     const errorStr = e?.message || String(e);
-    addStep(`Ошибка сохранения во время коммита в GitHub: ${errorStr}`, 'error');
-    return { success: false, error: errorStr, steps };
+    addStep(`Сбой соединения с прокси-сервером: ${errorStr}`, 'error');
+    
+    addStep('Попытка резервной прямой выгрузки с GitHub через браузер...', 'info');
+    const fallbackResult = await uploadDirectFromClient(cleanToken, cleanRepo, cleanPath, db);
+    if (!fallbackResult.success) {
+      addStep(`Резервная прямая выгрузка завершилась ошибкой: ${fallbackResult.error}`, 'error');
+      return {
+        success: false,
+        error: `Прокси недоступен (${errorStr}). Резервный метод: ${fallbackResult.error}`,
+        steps: [...steps, ...(fallbackResult.steps || [])]
+      };
+    }
+    addStep('Резервная прямая выгрузка совершена успешно!', 'success');
+    return {
+      ...fallbackResult,
+      steps: [...steps, ...(fallbackResult.steps || [])]
+    };
   }
 }
