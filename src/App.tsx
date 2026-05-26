@@ -8,6 +8,7 @@ import Analytics from './components/Analytics';
 import { RepairItem, ActiveTab } from './types';
 import { INITIAL_PHONES, INITIAL_ARCHIVE, INITIAL_PARTS } from './initialData';
 import { downloadYandexDoc, uploadYandexDoc, mergeDatabases } from './lib/yandexDisk';
+import { downloadGithubDoc, uploadGithubDoc } from './lib/githubSync';
 import YandexSyncSettings from './components/YandexSyncSettings';
 import PWAInstallGuide from './components/PWAInstallGuide';
 import { Phone, ShoppingCart, Trash2, TrendingUp, Cloud, Cpu, RefreshCw, CheckCircle2, Smartphone } from 'lucide-react';
@@ -78,9 +79,27 @@ export default function App() {
     return [];
   });
 
+  // Cloud Synchronization Provider choice
+  const [syncProvider, setSyncProvider] = useState<'yandex' | 'github'>(() => {
+    return (localStorage.getItem('cloud_sync_provider') as 'yandex' | 'github') || 'yandex';
+  });
+
   // Yandex.Disk Synced Cloud parameters
   const [ydToken, setYdToken] = useState<string>(() => {
     return localStorage.getItem('yandex_disk_token') || '';
+  });
+
+  // GitHub Synced Cloud parameters
+  const [ghToken, setGhToken] = useState<string>(() => {
+    return localStorage.getItem('github_sync_token') || '';
+  });
+
+  const [ghRepo, setGhRepo] = useState<string>(() => {
+    return localStorage.getItem('github_sync_repo') || '';
+  });
+
+  const [ghPath, setGhPath] = useState<string>(() => {
+    return localStorage.getItem('github_sync_path') || 'repair_db.json';
   });
 
   // Dynamic sync status indicator
@@ -111,132 +130,257 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [toast]);
 
-  // Trigger Cloud Sync flow with Yandex Disk
+  const isCloudActive = () => {
+    if (syncProvider === 'github') {
+      return !!(ghToken && ghRepo);
+    }
+    return !!ydToken;
+  };
+
+  // Trigger Cloud Sync flow with active provider
   const triggerCloudSync = async (
     currentItems: RepairItem[],
     currentParts: string,
     currentDeleted: string[],
-    tokenToUse?: string
+    overrideToken?: string,
+    overrideRepo?: string,
+    overridePath?: string
   ) => {
-    const token = tokenToUse !== undefined ? tokenToUse : ydToken;
-    if (!token) {
-      setSyncStatus('local');
-      return;
-    }
+    const provider = syncProvider;
+    
+    if (provider === 'github') {
+      const token = overrideToken !== undefined ? overrideToken : ghToken;
+      const repo = overrideRepo !== undefined ? overrideRepo : ghRepo;
+      const pathValue = overridePath !== undefined ? overridePath : ghPath;
 
-    setSyncStatus('syncing');
-    setSyncErrorMessage('');
-    let downloadResult: any = null;
-    try {
-      // 1. Download database from Yandex.Disk
-      downloadResult = await downloadYandexDoc(token);
-      
-      if (downloadResult.steps) {
-        setSyncSteps(downloadResult.steps);
-        localStorage.setItem('yandex_sync_steps', JSON.stringify(downloadResult.steps));
-      }
-
-      if (!downloadResult.success) {
-        // If there was a network/CDN error, DO NOT initialize or overwrite! Just show error and abort.
-        console.warn('Yandex.Disk pull failed (network or request error). Aborting upload to avoid dataloss.', downloadResult.error);
-        setSyncStatus('error');
-        setSyncErrorMessage(downloadResult.error || 'Не удалось получить данные с Яндекс.Диска.');
-        showToast('Ошибка сетевого диска. Синхронизация отложена.', 'error');
+      if (!token || !repo) {
+        setSyncStatus('local');
         return;
       }
 
-      let finalSteps = downloadResult.steps || [];
-
-      if (downloadResult.exists && downloadResult.data) {
-        const remoteDb = downloadResult.data;
-        // Detect if there is new incoming data from another device
-        const remoteItems = remoteDb.items || [];
-        const remotePartsText = remoteDb.partsText || '';
-        const localIds = new Set(currentItems.map(i => i.id));
-        const hasNewIncomingItems = remoteItems.length === 0 ? false : remoteItems.some(item => !localIds.has(item.id));
-        const hasNewPartsText = remotePartsText !== currentParts && remotePartsText !== '';
-
-        // 2. Perform safe, conflict-free database merge
-        const { mergedItems, mergedPartsText, mergedDeletedIds } = mergeDatabases(
-          currentItems,
-          currentParts,
-          currentDeleted,
-          remoteDb
-        );
-
-        // 3. Update React local states
-        setItems(mergedItems);
-        setPartsText(mergedPartsText);
-        setDeletedIds(mergedDeletedIds);
-
-        // 4. Save newly merged consolidated DB back to cloud
-        const uploadResult = await uploadYandexDoc(token, {
-          items: mergedItems,
-          partsText: mergedPartsText,
-          deletedIds: mergedDeletedIds,
-          updatedAt: Date.now()
-        });
-
-        if (uploadResult.steps) {
-          finalSteps = [...finalSteps, ...uploadResult.steps];
-          setSyncSteps(finalSteps);
-          localStorage.setItem('yandex_sync_steps', JSON.stringify(finalSteps));
+      setSyncStatus('syncing');
+      setSyncErrorMessage('');
+      let downloadResult: any = null;
+      try {
+        // 1. Download database from GitHub
+        downloadResult = await downloadGithubDoc(token, repo, pathValue);
+        
+        if (downloadResult.steps) {
+          setSyncSteps(downloadResult.steps);
+          localStorage.setItem('yandex_sync_steps', JSON.stringify(downloadResult.steps));
         }
 
-        if (uploadResult.success) {
-          setSyncStatus('synced');
-          setSyncErrorMessage('');
-          if (hasNewIncomingItems || hasNewPartsText) {
-            showToast('Облако: получены новые записи!', 'success');
+        if (!downloadResult.success) {
+          console.warn('GitHub pull failed. Aborting upload to avoid dataloss.', downloadResult.error);
+          setSyncStatus('error');
+          setSyncErrorMessage(downloadResult.error || 'Не удалось получить данные с GitHub.');
+          showToast('Ошибка репозитория. Синхронизация отложена.', 'error');
+          return;
+        }
+
+        let finalSteps = downloadResult.steps || [];
+
+        if (downloadResult.exists && downloadResult.data) {
+          const remoteDb = downloadResult.data;
+          const remoteItems = remoteDb.items || [];
+          const remotePartsText = remoteDb.partsText || '';
+          const localIds = new Set(currentItems.map(i => i.id));
+          const hasNewIncomingItems = remoteItems.length === 0 ? false : remoteItems.some(item => !localIds.has(item.id));
+          const hasNewPartsText = remotePartsText !== currentParts && remotePartsText !== '';
+
+          // 2. Perform safe database merge
+          const { mergedItems, mergedPartsText, mergedDeletedIds } = mergeDatabases(
+            currentItems,
+            currentParts,
+            currentDeleted,
+            remoteDb
+          );
+
+          // 3. Update states
+          setItems(mergedItems);
+          setPartsText(mergedPartsText);
+          setDeletedIds(mergedDeletedIds);
+
+          // 4. Save consolidated back to GitHub
+          const uploadResult = await uploadGithubDoc(token, repo, pathValue, {
+            items: mergedItems,
+            partsText: mergedPartsText,
+            deletedIds: mergedDeletedIds,
+            updatedAt: Date.now()
+          });
+
+          if (uploadResult.steps) {
+            finalSteps = [...finalSteps, ...uploadResult.steps];
+            setSyncSteps(finalSteps);
+            localStorage.setItem('yandex_sync_steps', JSON.stringify(finalSteps));
+          }
+
+          if (uploadResult.success) {
+            setSyncStatus('synced');
+            setSyncErrorMessage('');
+            if (hasNewIncomingItems || hasNewPartsText) {
+              showToast('GitHub: получены новые записи!', 'success');
+            }
+          } else {
+            setSyncStatus('error');
+            setSyncErrorMessage(uploadResult.error || 'Не удалось записать изменения в GitHub.');
           }
         } else {
-          setSyncStatus('error');
-          setSyncErrorMessage(uploadResult.error || 'Не удалось отправить обновленные данные на Диск.');
-        }
-      } else {
-        // First sync on empty disk / file doesn't exist yet: initialize with current state
-        const uploadResult = await uploadYandexDoc(token, {
-          items: currentItems,
-          partsText: currentParts,
-          deletedIds: currentDeleted,
-          updatedAt: Date.now()
-        });
+          // Initialize empty
+          const uploadResult = await uploadGithubDoc(token, repo, pathValue, {
+            items: currentItems,
+            partsText: currentParts,
+            deletedIds: currentDeleted,
+            updatedAt: Date.now()
+          });
 
-        if (uploadResult.steps) {
-          finalSteps = [...finalSteps, ...uploadResult.steps];
-          setSyncSteps(finalSteps);
-          localStorage.setItem('yandex_sync_steps', JSON.stringify(finalSteps));
-        }
+          if (uploadResult.steps) {
+            finalSteps = [...finalSteps, ...uploadResult.steps];
+            setSyncSteps(finalSteps);
+            localStorage.setItem('yandex_sync_steps', JSON.stringify(finalSteps));
+          }
 
-        if (uploadResult.success) {
-          setSyncStatus('synced');
-          setSyncErrorMessage('');
-        } else {
-          setSyncStatus('error');
-          setSyncErrorMessage(uploadResult.error || 'Не удалось создать базу данных в папке приложения на Диске.');
+          if (uploadResult.success) {
+            setSyncStatus('synced');
+            setSyncErrorMessage('');
+          } else {
+            setSyncStatus('error');
+            setSyncErrorMessage(uploadResult.error || 'Не удалось создать базу данных в репозитории на GitHub.');
+          }
         }
+      } catch (e: any) {
+        console.error('Error during GitHub cloud sync:', e);
+        setSyncStatus('error');
+        setSyncErrorMessage(e?.message || 'Неизвестная ошибка во время синхронизации.');
+        const errStep = {
+          time: new Date().toLocaleTimeString('ru-RU'),
+          message: `Критический сбой синхронизации GitHub: ${e?.message || 'Неизвестная ошибка'}`,
+          status: 'error' as const
+        };
+        const updated = [...(downloadResult?.steps || []), errStep];
+        setSyncSteps(updated);
+        localStorage.setItem('yandex_sync_steps', JSON.stringify(updated));
       }
-    } catch (e: any) {
-      console.error('Error during Yandex.Disk cloud sync:', e);
-      setSyncStatus('error');
-      setSyncErrorMessage(e?.message || 'Неизвестная ошибка во время синхронизации.');
-      const errStep = {
-        time: new Date().toLocaleTimeString('ru-RU'),
-        message: `Критический сбой синхронизации: ${e?.message || 'Неизвестная ошибка'}`,
-        status: 'error' as const
-      };
-      const updated = [...(downloadResult?.steps || []), errStep];
-      setSyncSteps(updated);
-      localStorage.setItem('yandex_sync_steps', JSON.stringify(updated));
+    } else {
+      // Yandex Provider flow
+      const token = overrideToken !== undefined ? overrideToken : ydToken;
+      if (!token) {
+        setSyncStatus('local');
+        return;
+      }
+
+      setSyncStatus('syncing');
+      setSyncErrorMessage('');
+      let downloadResult: any = null;
+      try {
+        // 1. Download database from Yandex.Disk
+        downloadResult = await downloadYandexDoc(token);
+        
+        if (downloadResult.steps) {
+          setSyncSteps(downloadResult.steps);
+          localStorage.setItem('yandex_sync_steps', JSON.stringify(downloadResult.steps));
+        }
+
+        if (!downloadResult.success) {
+          console.warn('Yandex.Disk pull failed (network or request error). Aborting upload to avoid dataloss.', downloadResult.error);
+          setSyncStatus('error');
+          setSyncErrorMessage(downloadResult.error || 'Не удалось получить данные с Яндекс.Диска.');
+          showToast('Ошибка сетевого диска. Синхронизация отложена.', 'error');
+          return;
+        }
+
+        let finalSteps = downloadResult.steps || [];
+
+        if (downloadResult.exists && downloadResult.data) {
+          const remoteDb = downloadResult.data;
+          const remoteItems = remoteDb.items || [];
+          const remotePartsText = remoteDb.partsText || '';
+          const localIds = new Set(currentItems.map(i => i.id));
+          const hasNewIncomingItems = remoteItems.length === 0 ? false : remoteItems.some(item => !localIds.has(item.id));
+          const hasNewPartsText = remotePartsText !== currentParts && remotePartsText !== '';
+
+          // 2. Perform safe, conflict-free database merge
+          const { mergedItems, mergedPartsText, mergedDeletedIds } = mergeDatabases(
+            currentItems,
+            currentParts,
+            currentDeleted,
+            remoteDb
+          );
+
+          // 3. Update React local states
+          setItems(mergedItems);
+          setPartsText(mergedPartsText);
+          setDeletedIds(mergedDeletedIds);
+
+          // 4. Save newly merged consolidated DB back to cloud
+          const uploadResult = await uploadYandexDoc(token, {
+            items: mergedItems,
+            partsText: mergedPartsText,
+            deletedIds: mergedDeletedIds,
+            updatedAt: Date.now()
+          });
+
+          if (uploadResult.steps) {
+            finalSteps = [...finalSteps, ...uploadResult.steps];
+            setSyncSteps(finalSteps);
+            localStorage.setItem('yandex_sync_steps', JSON.stringify(finalSteps));
+          }
+
+          if (uploadResult.success) {
+            setSyncStatus('synced');
+            setSyncErrorMessage('');
+            if (hasNewIncomingItems || hasNewPartsText) {
+              showToast('Облако: получены новые записи!', 'success');
+            }
+          } else {
+            setSyncStatus('error');
+            setSyncErrorMessage(uploadResult.error || 'Не удалось отправить обновленные данные на Диск.');
+          }
+        } else {
+          // First sync on empty disk / file doesn't exist yet: initialize with current state
+          const uploadResult = await uploadYandexDoc(token, {
+            items: currentItems,
+            partsText: currentParts,
+            deletedIds: currentDeleted,
+            updatedAt: Date.now()
+          });
+
+          if (uploadResult.steps) {
+            finalSteps = [...finalSteps, ...uploadResult.steps];
+            setSyncSteps(finalSteps);
+            localStorage.setItem('yandex_sync_steps', JSON.stringify(finalSteps));
+          }
+
+          if (uploadResult.success) {
+            setSyncStatus('synced');
+            setSyncErrorMessage('');
+          } else {
+            setSyncStatus('error');
+            setSyncErrorMessage(uploadResult.error || 'Не удалось создать базу данных в папке приложения на Диске.');
+          }
+        }
+      } catch (e: any) {
+        console.error('Error during Yandex.Disk cloud sync:', e);
+        setSyncStatus('error');
+        setSyncErrorMessage(e?.message || 'Неизвестная ошибка во время синхронизации.');
+        const errStep = {
+          time: new Date().toLocaleTimeString('ru-RU'),
+          message: `Критический сбой синхронизации: ${e?.message || 'Неизвестная ошибка'}`,
+          status: 'error' as const
+        };
+        const updated = [...(downloadResult?.steps || []), errStep];
+        setSyncSteps(updated);
+        localStorage.setItem('yandex_sync_steps', JSON.stringify(updated));
+      }
     }
   };
 
-  // Run backend data loader OR Yandex.Disk sync on load
+  // Run backend data loader OR Cloud sync on load
   useEffect(() => {
-    if (ydToken) {
-      triggerCloudSync(items, partsText, deletedIds, ydToken);
+    if (isCloudActive()) {
+      triggerCloudSync(items, partsText, deletedIds);
     } else {
-      // Fallback: If no Yandex Disk connected, query the local node server
+      // Fallback: If no cloud connected, query the local node server
       const fetchBackendData = async () => {
         setSyncStatus('syncing');
         try {
@@ -261,16 +405,16 @@ export default function App() {
       };
       fetchBackendData();
     }
-  }, [ydToken]);
+  }, [ydToken, ghToken, ghRepo, syncProvider]);
 
   // Sync immediately when the app becomes visible or the browser tab is focused (crucial for mobile wake-up)
   useEffect(() => {
-    if (!ydToken) return;
+    if (!isCloudActive()) return;
 
     const handleFocusSync = () => {
       // Only trigger if document is fully visible to prevent background spamming
       if (document.visibilityState === 'visible') {
-        triggerCloudSync(items, partsText, deletedIds, ydToken);
+        triggerCloudSync(items, partsText, deletedIds);
       }
     };
 
@@ -281,18 +425,18 @@ export default function App() {
       window.removeEventListener('focus', handleFocusSync);
       document.removeEventListener('visibilitychange', handleFocusSync);
     };
-  }, [ydToken, items, partsText, deletedIds]);
+  }, [ydToken, ghToken, ghRepo, syncProvider, items, partsText, deletedIds]);
 
   // Periodic automatic sync with Cloud (every 45 seconds)
   useEffect(() => {
-    if (!ydToken) return;
+    if (!isCloudActive()) return;
 
     const interval = setInterval(() => {
-      triggerCloudSync(items, partsText, deletedIds, ydToken);
+      triggerCloudSync(items, partsText, deletedIds);
     }, 45000);
 
     return () => clearInterval(interval);
-  }, [ydToken, items, partsText, deletedIds]);
+  }, [ydToken, ghToken, ghRepo, syncProvider, items, partsText, deletedIds]);
 
   // Save changes to LocalStorage instantly
   useEffect(() => {
@@ -307,11 +451,17 @@ export default function App() {
     localStorage.setItem('deleted_ids', JSON.stringify(deletedIds));
   }, [deletedIds]);
 
+  // Handle Cloud provider swap
+  const handleSetSyncProvider = (provider: 'yandex' | 'github') => {
+    localStorage.setItem('cloud_sync_provider', provider);
+    setSyncProvider(provider);
+  };
+
   // Handle Yandex Token setup
   const handleSaveYandexToken = async (newToken: string): Promise<boolean> => {
     localStorage.setItem('yandex_disk_token', newToken);
     setYdToken(newToken);
-    // Directly run immediate initial synchronization
+    // Directly run immediate initial synchronization with updated provider config
     await triggerCloudSync(items, partsText, deletedIds, newToken);
     return true;
   };
@@ -319,6 +469,29 @@ export default function App() {
   const handleClearYandexToken = () => {
     localStorage.removeItem('yandex_disk_token');
     setYdToken('');
+    setSyncStatus('local');
+  };
+
+  // Handle GitHub params setup
+  const handleSaveGhParams = async (newToken: string, newRepo: string, newPath: string): Promise<boolean> => {
+    localStorage.setItem('github_sync_token', newToken);
+    localStorage.setItem('github_sync_repo', newRepo);
+    localStorage.setItem('github_sync_path', newPath);
+    setGhToken(newToken);
+    setGhRepo(newRepo);
+    setGhPath(newPath);
+    // Directly run immediate initial synchronization
+    await triggerCloudSync(items, partsText, deletedIds, newToken, newRepo, newPath);
+    return true;
+  };
+
+  const handleClearGhParams = () => {
+    localStorage.removeItem('github_sync_token');
+    localStorage.removeItem('github_sync_repo');
+    localStorage.removeItem('github_sync_path');
+    setGhToken('');
+    setGhRepo('');
+    setGhPath('repair_db.json');
     setSyncStatus('local');
   };
 
@@ -338,9 +511,9 @@ export default function App() {
     const updatedItems = [newItem, ...items];
     setItems(updatedItems);
 
-    // 1. Save to Yandex Cloud (if token present)
-    if (ydToken) {
-      triggerCloudSync(updatedItems, partsText, deletedIds, ydToken);
+    // 1. Save to Cloud (if active)
+    if (isCloudActive()) {
+      triggerCloudSync(updatedItems, partsText, deletedIds);
     } else {
       // 2. Save directly to local Node express backend
       try {
@@ -365,8 +538,8 @@ export default function App() {
     setItems(updatedItems);
     setSelectedItem(updatedWithTime);
 
-    if (ydToken) {
-      triggerCloudSync(updatedItems, partsText, deletedIds, ydToken);
+    if (isCloudActive()) {
+      triggerCloudSync(updatedItems, partsText, deletedIds);
     } else {
       try {
         const res = await fetch(`/api/repairs/${updated.id}`, {
@@ -399,8 +572,8 @@ export default function App() {
       setSelectedItem(null);
     }
 
-    if (ydToken) {
-      triggerCloudSync(updatedItems, partsText, deletedIds, ydToken);
+    if (isCloudActive()) {
+      triggerCloudSync(updatedItems, partsText, deletedIds);
     } else if (targetItem) {
       try {
         const res = await fetch(`/api/repairs/${id}`, {
@@ -429,8 +602,8 @@ export default function App() {
 
     setItems(updatedItems);
 
-    if (ydToken) {
-      triggerCloudSync(updatedItems, partsText, deletedIds, ydToken);
+    if (isCloudActive()) {
+      triggerCloudSync(updatedItems, partsText, deletedIds);
     } else if (targetItem) {
       try {
         const res = await fetch(`/api/repairs/${id}`, {
@@ -458,8 +631,8 @@ export default function App() {
       setSelectedItem(null);
     }
 
-    if (ydToken) {
-      triggerCloudSync(updatedItems, partsText, updatedDeleted, ydToken);
+    if (isCloudActive()) {
+      triggerCloudSync(updatedItems, partsText, updatedDeleted);
     } else {
       try {
         const res = await fetch(`/api/repairs/${id}`, {
@@ -477,8 +650,8 @@ export default function App() {
   const handleUpdatePartsText = async (newText: string) => {
     setPartsText(newText);
     
-    if (ydToken) {
-      triggerCloudSync(items, newText, deletedIds, ydToken);
+    if (isCloudActive()) {
+      triggerCloudSync(items, newText, deletedIds);
     } else {
       try {
         const res = await fetch('/api/parts', {
@@ -732,17 +905,24 @@ export default function App() {
         onSave={handleAddNewItem}
       />
 
-      {/* Yandex.Disk Cloud Synchronization Settings Modal */}
+      {/* Cloud Synchronization Settings Modal (supports Yandex & GitHub) */}
       <YandexSyncSettings
         isOpen={isYdOpen}
         onClose={() => setIsYdOpen(false)}
+        syncProvider={syncProvider}
+        onSetSyncProvider={handleSetSyncProvider}
         token={ydToken}
         onSaveToken={handleSaveYandexToken}
         onClearToken={handleClearYandexToken}
+        ghToken={ghToken}
+        ghRepo={ghRepo}
+        ghPath={ghPath}
+        onSaveGhParams={handleSaveGhParams}
+        onClearGhParams={handleClearGhParams}
         syncStatus={syncStatus}
         syncErrorMessage={syncErrorMessage}
         syncSteps={syncSteps}
-        onForceSync={() => triggerCloudSync(items, partsText, deletedIds, ydToken)}
+        onForceSync={() => triggerCloudSync(items, partsText, deletedIds)}
       />
 
       {/* PWA Installer Assistant and Guide Booklet */}
