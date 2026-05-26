@@ -1,15 +1,22 @@
-import React, { useState, useEffect } from 'react';
-import { X, Key, Cloud, CheckCircle2, HelpCircle, AlertTriangle, RefreshCw, Copy, ExternalLink, Github } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { X, Key, Cloud, CheckCircle2, HelpCircle, AlertTriangle, RefreshCw, Copy, ExternalLink, Github, Download, Upload } from 'lucide-react';
 import { testYandexToken } from '../lib/yandexDisk';
 import { testGithubToken } from '../lib/githubSync';
+import { RepairItem } from '../types';
 
 interface YandexSyncSettingsProps {
   isOpen: boolean;
   onClose: () => void;
   
   // Sync general choice
-  syncProvider: 'yandex' | 'github';
-  onSetSyncProvider: (provider: 'yandex' | 'github') => void;
+  syncProvider: 'yandex' | 'github' | 'manual';
+  onSetSyncProvider: (provider: 'yandex' | 'github' | 'manual') => void;
+
+  // Manual Export / Import Props
+  items: RepairItem[];
+  partsText: string;
+  deletedIds: string[];
+  onImportDb: (items: RepairItem[], partsText: string, deletedIds: string[]) => void;
 
   // Yandex Disk properties
   token: string;
@@ -34,6 +41,10 @@ export default function YandexSyncSettings({
   onClose,
   syncProvider,
   onSetSyncProvider,
+  items,
+  partsText,
+  deletedIds,
+  onImportDb,
   token,
   onSaveToken,
   onClearToken,
@@ -62,6 +73,11 @@ export default function YandexSyncSettings({
   const [testingGithub, setTestingGithub] = useState(false);
   const [githubTestResult, setGithubTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [showGithubInstructions, setShowGithubInstructions] = useState(true);
+
+  // Manual Export/Import States
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [manualError, setManualError] = useState('');
+  const [manualSuccess, setManualSuccess] = useState('');
 
   // UI helpers
   const [showLogs, setShowLogs] = useState(syncStatus === 'error');
@@ -180,6 +196,76 @@ export default function YandexSyncSettings({
     setGithubTestResult(null);
   };
 
+  const handleExportJson = () => {
+    try {
+      const dbPayload = {
+        items,
+        partsText,
+        deletedIds: deletedIds || [],
+        updatedAt: Date.now(),
+        exportedBy: 'RepairApp Backup Service'
+      };
+      const jsonString = JSON.stringify(dbPayload, null, 2);
+      const blob = new Blob([jsonString], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      const dateStr = new Date().toLocaleDateString('ru-RU').replace(/\./g, '_');
+      link.download = `repair_db_${dateStr}.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      setManualSuccess('Слепок базы девайса успешно экспортирован в файл!');
+      setManualError('');
+    } catch (e: any) {
+      setManualError(`Не удалось выполнить экспорт: ${e?.message || e}`);
+      setManualSuccess('');
+    }
+  };
+
+  const handleImportJson = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const text = event.target?.result as string;
+        const parsed = JSON.parse(text);
+
+        if (!parsed || typeof parsed !== 'object') {
+          throw new Error('Файл не содержит корректные данные (ожидается { items, partsText })');
+        }
+
+        const importedItems = parsed.items;
+        const importedPartsText = parsed.partsText !== undefined ? parsed.partsText : '';
+        const importedDeletedIds = Array.isArray(parsed.deletedIds) ? parsed.deletedIds : [];
+
+        if (importedItems !== undefined && !Array.isArray(importedItems)) {
+          throw new Error('Поле "items" должно быть списком ремонтов.');
+        }
+
+        const validatedItems = Array.isArray(importedItems) ? importedItems : [];
+
+        onImportDb(validatedItems, importedPartsText, importedDeletedIds);
+        setManualSuccess(`Отлично! Успешно загружен слепок из файла: ${validatedItems.length} записей восстановлено.`);
+        setManualError('');
+        if (fileInputRef.current) {
+          fileInputRef.current.value = '';
+        }
+      } catch (err: any) {
+        setManualError(`Некорректный формат файла резервной копии: ${err?.message || err}`);
+        setManualSuccess('');
+      }
+    };
+    reader.onerror = () => {
+      setManualError('Ошибка при чтении файла с диска.');
+      setManualSuccess('');
+    };
+    reader.readAsText(file);
+  };
+
   const isYandexActive = !!token;
   const isGithubActive = !!(ghToken && ghRepo);
 
@@ -213,33 +299,157 @@ export default function YandexSyncSettings({
           <button
             type="button"
             onClick={() => onSetSyncProvider('yandex')}
-            className={`flex-1 py-3 font-semibold tracking-tight transition-all border-b-2 flex items-center justify-center gap-1.5 cursor-pointer ${
+            className={`flex-[1.1] py-3 font-semibold tracking-tight transition-all border-b-2 flex items-center justify-center gap-1 cursor-pointer ${
               syncProvider === 'yandex'
                 ? 'border-yellow-500 text-yellow-500 bg-yellow-500/5'
                 : 'border-transparent text-neutral-400 hover:text-white'
             }`}
           >
-            <Cloud className="w-3.5 h-3.5" />
-            Яндекс.Диск {isYandexActive && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block animate-pulse"></span>}
+            <Cloud className="w-3.5 h-3.5 flex-shrink-0" />
+            <span className="truncate">Яндекс.Диск</span>
+            {isYandexActive && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block animate-pulse flex-shrink-0"></span>}
           </button>
           
           <button
             type="button"
             onClick={() => onSetSyncProvider('github')}
-            className={`flex-1 py-3 font-semibold tracking-tight transition-all border-b-2 flex items-center justify-center gap-1.5 cursor-pointer ${
+            className={`flex-[1.1] py-3 font-semibold tracking-tight transition-all border-b-2 flex items-center justify-center gap-1 cursor-pointer ${
               syncProvider === 'github'
                 ? 'border-yellow-500 text-yellow-500 bg-yellow-500/5'
                 : 'border-transparent text-neutral-400 hover:text-white'
             }`}
           >
-            <Github className="w-3.5 h-3.5" />
-            GitHub Репозиторий {isGithubActive && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block animate-pulse"></span>}
+            <Github className="w-3.5 h-3.5 flex-shrink-0" />
+            <span className="truncate">GitHub</span>
+            {isGithubActive && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block animate-pulse flex-shrink-0"></span>}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => onSetSyncProvider('manual')}
+            className={`flex-[0.9] py-3 font-semibold tracking-tight transition-all border-b-2 flex items-center justify-center gap-1 cursor-pointer ${
+              syncProvider === 'manual'
+                ? 'border-yellow-500 text-yellow-500 bg-yellow-500/5'
+                : 'border-transparent text-neutral-400 hover:text-white'
+            }`}
+          >
+            <Download className="w-3.5 h-3.5 flex-shrink-0" />
+            <span className="truncate">Без интернета (JSON)</span>
           </button>
         </div>
 
         {/* Scrollable Content */}
         <div className="p-5 overflow-y-auto space-y-5 flex-1 select-none">
           
+          {/* ======================= TAB: MANUAL EXPORT/IMPORT ======================= */}
+          {syncProvider === 'manual' && (
+            <div className="space-y-4 animate-fade-in text-left">
+              <div className="bg-[#111111] border border-[#262626] rounded-lg p-4 space-y-3">
+                <div className="flex items-center space-x-2.5 text-yellow-500">
+                  <CheckCircle2 className="w-5 h-5 text-yellow-500" />
+                  <h4 className="text-sm font-semibold text-neutral-100">100% Рабочий вариант без костылей</h4>
+                </div>
+                <p className="text-xs text-neutral-400 leading-relaxed font-sans">
+                  Этот способ <strong className="text-neutral-200">абсолютно автономен</strong> и работает вообще без интернета, VPN, прокси, сложных токенов, Git-аккаунтов и паролей. Вы просто скачиваете слепок вашей базы данных на одном устройстве и загружаете его на другом.
+                </p>
+                <div className="pt-2 grid grid-cols-2 gap-2 text-[11px] text-neutral-400 font-sans border-t border-[#1f1f1f]">
+                  <div className="flex items-center gap-1">
+                    <span className="text-emerald-400">✓</span> Без блокировок
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <span className="text-emerald-400">✓</span> Без ограничений CORS
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <span className="text-emerald-400">✓</span> Напрямую с диска
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <span className="text-emerald-400">✓</span> Файл можно слать в Telegram
+                  </div>
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
+                
+                {/* Export Button */}
+                <div className="bg-[#1a1a1a] border border-[#2d2d2d] hover:border-neutral-700 rounded-xl p-4 flex flex-col justify-between space-y-3 transition-colors">
+                  <div>
+                    <h5 className="text-xs font-bold text-neutral-200 flex items-center gap-1.5">
+                      <Download className="w-3.5 h-3.5 text-yellow-500" />
+                      Экспорт в файл
+                    </h5>
+                    <p className="text-[10px] text-neutral-500 mt-1.5 leading-relaxed font-sans">
+                      Скачает всю вашу базу ремонтов с текущего устройства в компактный файл <code className="text-neutral-300">repair_db.json</code>.
+                    </p>
+                  </div>
+                  <button
+                    onClick={handleExportJson}
+                    className="w-full bg-yellow-500 hover:bg-yellow-400 text-black font-semibold py-2 px-3 rounded-lg text-xs transition-colors flex items-center justify-center gap-1.5 cursor-pointer mt-2 font-sans"
+                  >
+                    Сохранить базу на устройство
+                  </button>
+                </div>
+
+                {/* Import Button */}
+                <div className="bg-[#1a1a1a] border border-[#2d2d2d] hover:border-neutral-700 rounded-xl p-4 flex flex-col justify-between space-y-3 transition-colors">
+                  <div>
+                    <h5 className="text-xs font-bold text-neutral-200 flex items-center gap-1.5">
+                      <Upload className="w-3.5 h-3.5 text-emerald-400" />
+                      Импорт из файла
+                    </h5>
+                    <p className="text-[10px] text-neutral-500 mt-1.5 leading-relaxed font-sans">
+                      Загрузит базу из файла <code className="text-neutral-300">.json</code>, заменяя базу на этом устройстве на файл-слепок.
+                    </p>
+                  </div>
+                  
+                  <input
+                    type="file"
+                    ref={fileInputRef}
+                    onChange={handleImportJson}
+                    accept=".json"
+                    className="hidden"
+                  />
+                  
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    className="w-full bg-[#2a2a2a] hover:bg-[#333333] border border-[#3a3a3a] hover:border-[#444444] text-white font-medium py-2 px-3 rounded-lg text-xs transition-colors flex items-center justify-center gap-1.5 cursor-pointer mt-2 font-sans"
+                  >
+                    Выбрать и загрузить файл
+                  </button>
+                </div>
+
+              </div>
+
+              {/* Status messages */}
+              {manualError && (
+                <div className="p-3 bg-rose-500/10 border border-rose-500/20 text-rose-300 rounded-lg flex items-start gap-2 text-xs font-sans">
+                  <AlertTriangle className="w-4 h-4 text-rose-400 flex-shrink-0 mt-0.5" />
+                  <span>{manualError}</span>
+                </div>
+              )}
+
+              {manualSuccess && (
+                <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 rounded-lg flex items-start gap-2 text-xs font-sans">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400 flex-shrink-0 mt-0.5" />
+                  <span>{manualSuccess}</span>
+                </div>
+              )}
+
+              {/* Informative Instructions panel */}
+              <div className="bg-[#141414] border border-[#222222] rounded-lg p-3 text-[10px] sm:text-xs text-neutral-400 space-y-2 font-sans">
+                <h6 className="font-bold text-neutral-300 uppercase tracking-wider text-[10px] flex items-center gap-1">
+                  <HelpCircle className="w-3.5 h-3.5 text-yellow-500" />
+                  КАК ПЕРЕНЕСТИ РЕМОНТЫ НА ДРУГОЙ ТЕЛЕФОН/КОМПЬЮТЕР ЗА 3 ШАГА:
+                </h6>
+                <ol className="list-decimal list-inside space-y-1 text-neutral-400 pl-1 leading-relaxed">
+                  <li>Нажмите <strong className="text-yellow-500">«Сохранить базу на устройство»</strong> на этом телефоне.</li>
+                  <li>Перешлите файл <code className="text-[#eee] bg-[#222] px-1 rounded text-[10px]">repair_db_*.json</code> себе в Telegram или WhatsApp.</li>
+                  <li>Откройте приложение на втором телефоне/ПК, зайдите сюда и нажмите <strong className="text-emerald-400">«Выбрать и загрузить файл»</strong>. Всё готово!</li>
+                </ol>
+              </div>
+            </div>
+          )}
+
           {/* ======================= TAB: YANDEX ======================= */}
           {syncProvider === 'yandex' && (
             <div className="space-y-4">

@@ -80,8 +80,8 @@ export default function App() {
   });
 
   // Cloud Synchronization Provider choice
-  const [syncProvider, setSyncProvider] = useState<'yandex' | 'github'>(() => {
-    return (localStorage.getItem('cloud_sync_provider') as 'yandex' | 'github') || 'yandex';
+  const [syncProvider, setSyncProvider] = useState<'yandex' | 'github' | 'manual'>(() => {
+    return (localStorage.getItem('cloud_sync_provider') as 'yandex' | 'github' | 'manual') || 'yandex';
   });
 
   // Yandex.Disk Synced Cloud parameters
@@ -452,7 +452,7 @@ export default function App() {
   }, [deletedIds]);
 
   // Handle Cloud provider swap
-  const handleSetSyncProvider = (provider: 'yandex' | 'github') => {
+  const handleSetSyncProvider = (provider: 'yandex' | 'github' | 'manual') => {
     localStorage.setItem('cloud_sync_provider', provider);
     setSyncProvider(provider);
   };
@@ -905,12 +905,21 @@ export default function App() {
         onSave={handleAddNewItem}
       />
 
-      {/* Cloud Synchronization Settings Modal (supports Yandex & GitHub) */}
+      {/* Cloud Synchronization Settings Modal (supports Yandex, GitHub, & Manual JSON) */}
       <YandexSyncSettings
         isOpen={isYdOpen}
         onClose={() => setIsYdOpen(false)}
         syncProvider={syncProvider}
         onSetSyncProvider={handleSetSyncProvider}
+        items={items}
+        partsText={partsText}
+        deletedIds={deletedIds}
+        onImportDb={(newItems, newParts, newDeleted) => {
+          setItems(newItems);
+          setPartsText(newParts);
+          setDeletedIds(newDeleted);
+          showToast('База успешно импортирована!', 'success');
+        }}
         token={ydToken}
         onSaveToken={handleSaveYandexToken}
         onClearToken={handleClearYandexToken}
